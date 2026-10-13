@@ -1,0 +1,59 @@
+
+name: Go validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Format, build, and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Check Go formatting
+        run: |
+          unformatted="$(gofmt -l main.go main_test.go)"
+          if [ -n "$unformatted" ]; then
+            printf 'These files need formatting:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Resolve Go dependencies
+        run: go mod tidy
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Run static analysis
+        run: go vet ./...
+
+      - name: Upload resolved module files
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: go-module-metadata
+          path: |
+            go.mod
+            go.sum
+          if-no-files-found: warn
+          retention-days: 7
