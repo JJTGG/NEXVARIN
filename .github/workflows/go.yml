@@ -27,13 +27,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Check Go formatting
+      - name: Inspect Go formatting
         run: |
-          unformatted="$(gofmt -l main.go main_test.go)"
-          if [ -n "$unformatted" ]; then
-            printf 'These files need formatting:\n%s\n' "$unformatted"
-            exit 1
-          fi
+          echo "Checking main.go and main_test.go"
+          gofmt -d main.go main_test.go
 
       - name: Resolve Go dependencies
         run: go mod tidy
@@ -57,3 +54,12 @@ jobs:
             go.sum
           if-no-files-found: warn
           retention-days: 7
+
+      - name: Enforce Go formatting
+        if: always()
+        run: |
+          unformatted="$(gofmt -l main.go main_test.go)"
+          if [ -n "$unformatted" ]; then
+            printf 'These files need formatting:\n%s\n' "$unformatted"
+            exit 1
+          fi
