@@ -1,0 +1,548 @@
+
+openapi: 3.1.0
+
+info:
+  title: NEXVARIN Control API
+  version: 0.1.0
+  description: |
+    Initial operator-controlled API for the NEXVARIN deployment/build
+    vertical slice.
+
+    This contract does not authorize public access. Authentication and
+    authorization must be implemented and tested before the API is exposed.
+    Project and repository registration are handled by controlled bootstrap
+    during the initial slice.
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local development and controlled test environment
+
+tags:
+  - name: Health
+  - name: Operations
+
+paths:
+  /health/live:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Check whether the API process is alive
+      security: []
+      responses:
+        "200":
+          description: The API process is responding.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Check whether the API can serve requests
+      description: |
+        Readiness must reflect required local dependencies. Responses must
+        not disclose credentials, internal host details, or sensitive
+        dependency diagnostics.
+      security: []
+      responses:
+        "200":
+          description: Required dependencies are ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: One or more required dependencies are unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /v1/projects/{projectId}/repositories/{repositoryId}/operations:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/RepositoryId"
+
+    get:
+      tags: [Operations]
+      operationId: listRepositoryOperations
+      summary: List operations for a registered repository
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque pagination cursor returned by the API.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1024
+      responses:
+        "200":
+          description: Operations returned in reverse creation order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [Operations]
+      operationId: createRepositoryOperation
+      summary: Create a build, deployment, cleanup, or reconciliation operation
+      description: |
+        The server must authorize the caller and validate the registered
+        project and repository before accepting work.
+
+        Operation creation and the initial outbox event must be committed
+        in the same database transaction.
+
+        Reusing an idempotency key with the same normalized request returns
+        the existing operation. Reusing it with a different request returns
+        a conflict. A repeated request must not create another logical
+        operation.
+
+        Acceptance is not completion. The returned operation state is
+        authoritative for the recorded workflow; external results must
+        still be verified.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Client-generated key unique within the documented scope.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: "#/components/schemas/BuildOperationRequest"
+                - $ref: "#/components/schemas/DeployOperationRequest"
+                - $ref: "#/components/schemas/CleanupOperationRequest"
+                - $ref: "#/components/schemas/ReconcileOperationRequest"
+      responses:
+        "202":
+          description: A new operation has been durably accepted.
+          headers:
+            Idempotency-Replayed:
+              description: False for a newly accepted operation.
+              schema:
+                type: boolean
+                const: false
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "200":
+          description: The idempotent request matched an existing operation.
+          headers:
+            Idempotency-Replayed:
+              description: True when the existing operation is being returned.
+              schema:
+                type: boolean
+                const: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The idempotency key conflicts with a different request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/operations/{operationId}:
+    parameters:
+      - $ref: "#/components/parameters/OperationId"
+
+    get:
+      tags: [Operations]
+      operationId: getOperation
+      summary: Inspect an operation
+      description: |
+        The caller must be authorized to inspect the project containing
+        the operation. An operation identifier is not an authorization token.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current persisted operation state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/operations/{operationId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/OperationId"
+
+    post:
+      tags: [Operations]
+      operationId: cancelOperation
+      summary: Request cancellation of an operation
+      description: |
+        Cancellation is a request, not proof that work has stopped.
+
+        A running operation may transition to cancel_requested. The API
+        must not report cancelled until the worker has established that
+        relevant execution and external side effects are resolved.
+
+        Terminal operations are not reopened. For an already terminal
+        operation, return its current state without changing it.
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Cancellation was accepted and may still be in progress.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "200":
+          description: No additional cancellation action was necessary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The operation cannot safely accept the requested action.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Contract placeholder. Token issuance, audience, verification,
+        expiry, and authorization policy must be implemented and tested
+        before the API is exposed. This declaration does not implement auth.
+
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RepositoryId:
+      name: repositoryId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    BadRequest:
+      description: The request could not be parsed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    Unauthorized:
+      description: Authentication is missing or invalid.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    Forbidden:
+      description: The caller is not authorized for this resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    NotFound:
+      description: The resource does not exist or is not visible to the caller.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    InvalidRequest:
+      description: A request value violates the API contract.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    RateLimited:
+      description: The request rate limit has been reached.
+      headers:
+        Retry-After:
+          description: Minimum delay before a client retries, in seconds.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    InternalError:
+      description: An internal error occurred.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    Unavailable:
+      description: A required dependency is temporarily unavailable.
+      headers:
+        Retry-After:
+          description: Optional suggested retry delay, in seconds.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+
+    BuildOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [operationType, sourceRevision]
+      properties:
+        operationType:
+          type: string
+          const: build
+        sourceRevision:
+          $ref: "#/components/schemas/GitRevision"
+
+    DeployOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [operationType, artifactId]
+      properties:
+        operationType:
+          type: string
+          const: deploy
+        artifactId:
+          type: string
+          format: uuid
+          description: Existing verified artifact belonging to this project and repository.
+
+    CleanupOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [operationType, deploymentId]
+      properties:
+        operationType:
+          type: string
+          const: cleanup
+        deploymentId:
+          type: string
+          format: uuid
+          description: Deployment resource to clean up.
+
+    ReconcileOperationRequest:
+      type: object
+      additionalProperties: false
+      required: [operationType, parentOperationId]
+      properties:
+        operationType:
+          type: string
+          const: reconcile
+        parentOperationId:
+          type: string
+          format: uuid
+          description: Existing operation whose external outcome requires investigation.
+
+    GitRevision:
+      type: string
+      description: Full immutable Git commit identifier, not a branch or tag.
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+
+    Operation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - projectId
+        - repositoryId
+        - operationType
+        - status
+        - attemptCount
+        - maxAttempts
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        repositoryId:
+          type: string
+          format: uuid
+        parentOperationId:
+          type: [string, "null"]
+          format: uuid
+        operationType:
+          type: string
+          enum: [build, deploy, cleanup, reconcile]
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - retry_wait
+            - cancel_requested
+            - needs_reconciliation
+            - succeeded
+            - failed
+            - cancelled
+        sourceRevision:
+          type: [string, "null"]
+          pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        attemptCount:
+          type: integer
+          minimum: 0
+        maxAttempts:
+          type: integer
+          minimum: 1
+        errorCode:
+          type: [string, "null"]
+        errorSummary:
+          type: [string, "null"]
+          description: Sanitized summary; must not contain credentials or sensitive provider responses.
+        startedAt:
+          type: [string, "null"]
+          format: date-time
+        finishedAt:
+          type: [string, "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    OperationList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Operation"
+        nextCursor:
+          type: [string, "null"]
+          description: Opaque cursor for the next page.
+
+    Problem:
+      type: object
+      description: Sanitized problem details; never include secrets or stack traces.
+      additionalProperties: false
+      required: [title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri-reference
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        requestId:
+          type: string
+          description: Correlation identifier for investigation.
