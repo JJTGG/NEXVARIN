@@ -1,4 +1,3 @@
-
 name: Go validation
 
 on:
@@ -27,10 +26,22 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Inspect Go formatting
+      - name: Enforce Go formatting
+        shell: bash
         run: |
-          echo "Checking main.go and main_test.go"
-          gofmt -d main.go main_test.go
+          mapfile -d '' -t go_files < <(git ls-files -z -- '*.go')
+
+          if [ "${#go_files[@]}" -eq 0 ]; then
+            echo "No tracked Go files were found."
+            exit 1
+          fi
+
+          unformatted="$(gofmt -l "${go_files[@]}")"
+
+          if [ -n "$unformatted" ]; then
+            printf 'These Go files need formatting:\n%s\n' "$unformatted"
+            exit 1
+          fi
 
       - name: Resolve Go dependencies
         run: go mod tidy
@@ -54,12 +65,3 @@ jobs:
             go.sum
           if-no-files-found: warn
           retention-days: 7
-
-      - name: Enforce Go formatting
-        if: always()
-        run: |
-          unformatted="$(gofmt -l main.go main_test.go)"
-          if [ -n "$unformatted" ]; then
-            printf 'These files need formatting:\n%s\n' "$unformatted"
-            exit 1
-          fi
