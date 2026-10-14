@@ -20,9 +20,9 @@ const (
 )
 
 type operationHTTPTestAuthenticator struct {
-	principal    operationHTTPPrincipal
-	err          error
-	calls        int
+	principal     operationHTTPPrincipal
+	err           error
+	calls         int
 	receivedToken string
 }
 
@@ -169,8 +169,8 @@ func newOperationHTTPTestDependencies(
 	subject string,
 ) (*operationHTTPTestAuthenticator, *operationHTTPTestAuthorizer) {
 	return &operationHTTPTestAuthenticator{
-			principal: operationHTTPPrincipal{Subject: subject},
-		}, &operationHTTPTestAuthorizer{}
+		principal: operationHTTPPrincipal{Subject: subject},
+	}, &operationHTTPTestAuthorizer{}
 }
 
 func TestCreateRepositoryOperationHandlerFailsClosedWithoutDependencies(
@@ -361,10 +361,10 @@ func TestCreateRepositoryOperationHandlerHandlesAuthenticationErrors(
 		wantChallenge bool
 	}{
 		{
-			name: "invalid credentials",
-			authErr: errOperationUnauthenticated,
-			wantStatus: http.StatusUnauthorized,
-			wantCode: "unauthorized",
+			name:          "invalid credentials",
+			authErr:       errOperationUnauthenticated,
+			wantStatus:    http.StatusUnauthorized,
+			wantCode:      "unauthorized",
 			wantChallenge: true,
 		},
 		{
@@ -575,15 +575,15 @@ func TestCreateRepositoryOperationHandlerValidatesRequest(
 	validBody := operationHTTPTestBuildRequest(strings.Repeat("a", 40))
 
 	tests := []struct {
-		name      string
-		body      []byte
-		configure func(*http.Request)
+		name       string
+		body       []byte
+		configure  func(*http.Request)
 		wantStatus int
 		wantCode   string
 	}{
 		{
-			name:       "missing idempotency key",
-			body:       validBody,
+			name: "missing idempotency key",
+			body: validBody,
 			configure: func(request *http.Request) {
 				request.Header.Del("Idempotency-Key")
 			},
@@ -658,14 +658,14 @@ func TestCreateRepositoryOperationHandlerValidatesRequest(
 			wantCode:   "invalid_operation_request",
 		},
 		{
-			name: "invalid git revision",
-			body: operationHTTPTestBuildRequest("not-a-revision"),
+			name:       "invalid git revision",
+			body:       operationHTTPTestBuildRequest("not-a-revision"),
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "invalid_operation_request",
 		},
 		{
-			name: "unsupported operation type",
-			body: []byte(`{"operationType":"unknown"}`),
+			name:       "unsupported operation type",
+			body:       []byte(`{"operationType":"unknown"}`),
 			wantStatus: http.StatusUnprocessableEntity,
 			wantCode:   "invalid_operation_request",
 		},
