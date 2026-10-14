@@ -282,6 +282,134 @@ func TestRetryOutboxEventDeadLettersAtAttemptLimit(t *testing.T) {
 	}
 }
 
+func TestClaimOutboxEventsRecoversExpiredLeaseAndRejectsStaleOwner(
+	t *testing.T,
+) {
+	fixture, _ := createOutboxTestEvent(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	first, err := claimOutboxEvents(
+		ctx,
+		fixture.pool,
+		"worker-original",
+		10,
+		3,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("initial claim: %v", err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("initial claim returned %d events, want 1", len(first))
+	}
+
+	original := first[0]
+
+	// Expire the lease directly in the disposable integration database.
+	// This avoids timing-dependent sleeps while exercising the real claim SQL.
+	result, err := fixture.pool.Exec(ctx, `
+		UPDATE outbox_events
+		SET lease_expires_at = now() - interval '1 second'
+		WHERE id = $1::uuid
+		  AND lease_owner = $2
+	`, original.ID, original.LeaseOwner)
+	if err != nil {
+		t.Fatalf("expire original lease: %v", err)
+	}
+	if result.RowsAffected() != 1 {
+		t.Fatalf(
+			"expired lease update affected %d rows, want 1",
+			result.RowsAffected(),
+		)
+	}
+
+	recovered, err := claimOutboxEvents(
+		ctx,
+		fixture.pool,
+		"worker-recovered",
+		10,
+		3,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim event after lease expiry: %v", err)
+	}
+	if len(recovered) != 1 {
+		t.Fatalf(
+			"recovery claim returned %d events, want 1",
+			len(recovered),
+		)
+	}
+
+	current := recovered[0]
+
+	if current.ID != original.ID {
+		t.Fatalf(
+			"recovered event ID = %q, want original ID %q",
+			current.ID,
+			original.ID,
+		)
+	}
+	if current.AttemptCount != 2 {
+		t.Errorf("recovered attempt count = %d, want 2", current.AttemptCount)
+	}
+	if current.LeaseOwner == original.LeaseOwner {
+		t.Fatal("recovered event reused the expired lease token")
+	}
+	if !strings.HasPrefix(current.LeaseOwner, "worker-recovered:") {
+		t.Errorf(
+			"recovered lease owner = %q, want worker-recovered prefix",
+			current.LeaseOwner,
+		)
+	}
+	if !current.LeaseExpiresAt.After(time.Now()) {
+		t.Error("recovered lease expiration should be in the future")
+	}
+
+	if err := acknowledgeOutboxEvent(
+		ctx,
+		fixture.pool,
+		original.ID,
+		original.LeaseOwner,
+	); !errors.Is(err, errOutboxLeaseNotOwned) {
+		t.Errorf(
+			"acknowledgement with stale lease error = %v, want lease-not-owned",
+			err,
+		)
+	}
+
+	deadLettered, err := retryOrDeadLetterOutboxEvent(
+		ctx,
+		fixture.pool,
+		original.ID,
+		original.LeaseOwner,
+		3,
+		time.Second,
+		"stale_worker_failure",
+	)
+	if !errors.Is(err, errOutboxLeaseNotOwned) {
+		t.Fatalf(
+			"retry with stale lease error = %v, want lease-not-owned",
+			err,
+		)
+	}
+	if deadLettered {
+		t.Fatal("stale worker unexpectedly dead-lettered the recovered event")
+	}
+
+	// The current lease must remain valid after both stale-worker attempts.
+	if err := acknowledgeOutboxEvent(
+		ctx,
+		fixture.pool,
+		current.ID,
+		current.LeaseOwner,
+	); err != nil {
+		t.Fatalf("acknowledge recovered event with current lease: %v", err)
+	}
+}
+
 func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 	fixture := newOperationStoreTestFixture(t)
 
