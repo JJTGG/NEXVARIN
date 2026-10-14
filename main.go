@@ -77,6 +77,13 @@ func run() error {
 		defer pool.Close()
 	}
 
+	operationAuthenticator, err := loadOperationHTTPAuthenticatorFromEnvironment()
+	if err != nil {
+		return fmt.Errorf("configure operation authentication: %w", err)
+	}
+
+	operationAuthorizer := newPostgresOperationCreationAuthorizer(pool)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /health/live", func(
@@ -87,6 +94,15 @@ func run() error {
 	})
 
 	mux.HandleFunc("GET /health/ready", readinessHandler(pool))
+
+	mux.Handle(
+		"POST /v1/projects/{projectId}/repositories/{repositoryId}/operations",
+		createRepositoryOperationHandler(
+			pool,
+			operationAuthenticator,
+			operationAuthorizer,
+		),
+	)
 
 	server := &http.Server{
 		Addr:              listenAddress,
