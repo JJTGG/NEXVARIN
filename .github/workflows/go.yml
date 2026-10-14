@@ -55,6 +55,8 @@ jobs:
 
           if [ -n "$unformatted" ]; then
             printf 'These Go files need formatting:\n%s\n' "$unformatted"
+            printf '\nExact formatting diff from the CI Go version:\n'
+            gofmt -d "${go_files[@]}"
             exit 1
           fi
 
