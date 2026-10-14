@@ -55,11 +55,11 @@ type operationCreationAuthorizer interface {
 }
 
 type operationProblemResponse struct {
-	Type     string `json:"type"`
-	Title    string `json:"title"`
-	Status   int    `json:"status"`
-	Detail   string `json:"detail,omitempty"`
-	Code     string `json:"code,omitempty"`
+	Type      string `json:"type"`
+	Title     string `json:"title"`
+	Status    int    `json:"status"`
+	Detail    string `json:"detail,omitempty"`
+	Code      string `json:"code,omitempty"`
 	RequestID string `json:"requestId,omitempty"`
 }
 
