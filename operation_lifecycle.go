@@ -3,14 +3,14 @@ package main
 type operationStatus string
 
 const (
-	operationStatusQueued               operationStatus = "queued"
-	operationStatusRunning              operationStatus = "running"
-	operationStatusRetryWait             operationStatus = "retry_wait"
-	operationStatusCancelRequested       operationStatus = "cancel_requested"
-	operationStatusNeedsReconciliation  operationStatus = "needs_reconciliation"
-	operationStatusSucceeded             operationStatus = "succeeded"
-	operationStatusFailed                operationStatus = "failed"
-	operationStatusCancelled             operationStatus = "cancelled"
+	operationStatusQueued              operationStatus = "queued"
+	operationStatusRunning             operationStatus = "running"
+	operationStatusRetryWait           operationStatus = "retry_wait"
+	operationStatusCancelRequested     operationStatus = "cancel_requested"
+	operationStatusNeedsReconciliation operationStatus = "needs_reconciliation"
+	operationStatusSucceeded           operationStatus = "succeeded"
+	operationStatusFailed              operationStatus = "failed"
+	operationStatusCancelled           operationStatus = "cancelled"
 )
 
 // operationStatusTransitions defines the permitted state changes.
