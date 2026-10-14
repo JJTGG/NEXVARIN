@@ -24,11 +24,11 @@ var (
 )
 
 type operationOutcomeDetails struct {
-	AttemptCount   int    `json:"attemptCount"`
-	MaxAttempts    int    `json:"maxAttempts"`
-	ErrorCode      string `json:"errorCode,omitempty"`
-	RetryDelayMicros int64 `json:"retryDelayMicros,omitempty"`
-	RetryExhausted bool   `json:"retryExhausted,omitempty"`
+	AttemptCount     int    `json:"attemptCount"`
+	MaxAttempts      int    `json:"maxAttempts"`
+	ErrorCode        string `json:"errorCode,omitempty"`
+	RetryDelayMicros int64  `json:"retryDelayMicros,omitempty"`
+	RetryExhausted   bool   `json:"retryExhausted,omitempty"`
 }
 
 // completeOperation atomically marks a running operation as succeeded.
@@ -280,9 +280,9 @@ func recordOperationOutcome(
 	eventType := operationOutcomeEventType(finalStatus)
 
 	details, err := json.Marshal(operationOutcomeDetails{
-		AttemptCount:     attemptCount,
-		MaxAttempts:      maxAttempts,
-		ErrorCode:        errorCode,
+		AttemptCount: attemptCount,
+		MaxAttempts:  maxAttempts,
+		ErrorCode:    errorCode,
 		RetryDelayMicros: retryMicrosecondsForOutcome(
 			finalStatus,
 			retryMicroseconds,
