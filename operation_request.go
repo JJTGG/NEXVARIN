@@ -14,9 +14,9 @@ import (
 type operationType string
 
 const (
-	operationTypeBuild    operationType = "build"
-	operationTypeDeploy   operationType = "deploy"
-	operationTypeCleanup  operationType = "cleanup"
+	operationTypeBuild     operationType = "build"
+	operationTypeDeploy    operationType = "deploy"
+	operationTypeCleanup   operationType = "cleanup"
 	operationTypeReconcile operationType = "reconcile"
 )
 
