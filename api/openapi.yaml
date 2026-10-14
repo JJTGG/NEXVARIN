@@ -1,4 +1,3 @@
-
 openapi: 3.1.0
 
 info:
@@ -8,10 +7,20 @@ info:
     Initial operator-controlled API for the NEXVARIN deployment/build
     vertical slice.
 
-    This contract does not authorize public access. Authentication and
-    authorization must be implemented and tested before the API is exposed.
-    Project and repository registration are handled by controlled bootstrap
-    during the initial slice.
+    Operation creation uses bootstrap bearer authentication configured
+    through NEXVARIN_API_TOKEN and NEXVARIN_API_SUBJECT. The token is
+    supplied out-of-band and is not issued by this API.
+
+    These credentials are intended only for a controlled single-operator
+    environment. They are not the final multi-user authentication system.
+    Do not expose this API to untrusted networks.
+
+    Operation listing, inspection, and cancellation remain planned contract
+    entries. They must not be considered available until their handlers
+    are implemented, registered, and tested.
+
+    Project and repository registration are handled through controlled
+    bootstrap during the initial slice.
 
 servers:
   - url: http://127.0.0.1:8080
@@ -111,8 +120,12 @@ paths:
       operationId: createRepositoryOperation
       summary: Create a build, deployment, cleanup, or reconciliation operation
       description: |
-        The server must authorize the caller and validate the registered
-        project and repository before accepting work.
+        The server authenticates the caller and verifies ownership of the
+        project and membership of the repository in that project before
+        processing the request.
+
+        The initial implementation uses a configured bearer secret and
+        trusted subject for a controlled single-operator environment.
 
         Operation creation and the initial outbox event must be committed
         in the same database transaction.
@@ -121,6 +134,8 @@ paths:
         the existing operation. Reusing it with a different request returns
         a conflict. A repeated request must not create another logical
         operation.
+
+        Request bodies are limited to 64 KiB.
 
         Acceptance is not completion. The returned operation state is
         authoritative for the recorded workflow; external results must
@@ -180,11 +195,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The idempotency key conflicts with a different request.
+          description: The idempotency key conflicts with a different request, or the project or repository is inactive.
           content:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
         "422":
           $ref: "#/components/responses/InvalidRequest"
         "429":
@@ -276,9 +293,17 @@ components:
       type: http
       scheme: bearer
       description: |
-        Contract placeholder. Token issuance, audience, verification,
-        expiry, and authorization policy must be implemented and tested
-        before the API is exposed. This declaration does not implement auth.
+        Bootstrap-only bearer secret for a controlled single-operator
+        instance.
+
+        Configure NEXVARIN_API_TOKEN with a token of at least 32 bytes and
+        NEXVARIN_API_SUBJECT with the trusted project-owner subject.
+        Supply both values out-of-band through the deployment environment.
+
+        The API does not issue tokens or manage user identities, expiration,
+        refresh, or token revocation. Rotating the configured secret requires
+        updating the environment configuration. This is not a public or
+        multi-user authentication system.
 
   parameters:
     ProjectId:
@@ -307,7 +332,7 @@ components:
 
   responses:
     BadRequest:
-      description: The request could not be parsed.
+      description: The request could not be parsed or contains an invalid header.
       content:
         application/problem+json:
           schema:
@@ -336,6 +361,13 @@ components:
 
     InvalidRequest:
       description: A request value violates the API contract.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+
+    PayloadTooLarge:
+      description: The request body exceeds the 64 KiB limit.
       content:
         application/problem+json:
           schema:
