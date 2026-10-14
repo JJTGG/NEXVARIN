@@ -170,7 +170,6 @@ func recordOperationOutcome(
 	var currentStatus string
 	var currentLeaseOwner pgtype.Text
 	var currentLeaseExpiry pgtype.Timestamptz
-	var leaseIsCurrent bool
 	var attemptCount int
 	var maxAttempts int
 
@@ -179,7 +178,6 @@ func recordOperationOutcome(
 			status,
 			lease_owner,
 			lease_expires_at,
-			COALESCE(lease_expires_at > now(), FALSE),
 			attempt_count,
 			max_attempts
 		FROM operations
@@ -189,7 +187,6 @@ func recordOperationOutcome(
 		&currentStatus,
 		&currentLeaseOwner,
 		&currentLeaseExpiry,
-		&leaseIsCurrent,
 		&attemptCount,
 		&maxAttempts,
 	)
@@ -210,8 +207,26 @@ func recordOperationOutcome(
 
 	if !currentLeaseOwner.Valid ||
 		currentLeaseOwner.String != leaseOwner ||
-		!currentLeaseExpiry.Valid ||
-		!leaseIsCurrent {
+		!currentLeaseExpiry.Valid {
+		return empty, errOperationLeaseNotOwned
+	}
+
+	// This query intentionally occurs after SELECT FOR UPDATE has acquired
+	// the row lock. PostgreSQL now() is fixed at transaction start and could
+	// otherwise treat a lease as valid after a long lock wait.
+	var leaseIsCurrent bool
+	if err := tx.QueryRow(ctx, `
+		SELECT lease_expires_at > clock_timestamp()
+		FROM operations
+		WHERE id = $1::uuid
+	`, normalizedID).Scan(&leaseIsCurrent); err != nil {
+		return empty, fmt.Errorf(
+			"check operation lease expiry: %w",
+			err,
+		)
+	}
+
+	if !leaseIsCurrent {
 		return empty, errOperationLeaseNotOwned
 	}
 
@@ -238,7 +253,7 @@ func recordOperationOutcome(
 			lease_owner = NULL,
 			lease_expires_at = NULL,
 			next_attempt_at = CASE
-				WHEN $3 = 'retry_wait' THEN now()
+				WHEN $3 = 'retry_wait' THEN clock_timestamp()
 					+ ($6::double precision * interval '1 microsecond')
 				ELSE next_attempt_at
 			END,
@@ -251,14 +266,14 @@ func recordOperationOutcome(
 				ELSE NULLIF($5, '')
 			END,
 			finished_at = CASE
-				WHEN $3 IN ('succeeded', 'failed') THEN now()
+				WHEN $3 IN ('succeeded', 'failed') THEN clock_timestamp()
 				ELSE NULL
 			END,
-			updated_at = now()
+			updated_at = clock_timestamp()
 		WHERE id = $1::uuid
 		  AND status = 'running'
 		  AND lease_owner = $2
-		  AND lease_expires_at > now()
+		  AND lease_expires_at > clock_timestamp()
 		RETURNING `+operationRecordColumns,
 		normalizedID,
 		leaseOwner,
