@@ -283,12 +283,15 @@ func TestRetryOutboxEventDeadLettersAtAttemptLimit(t *testing.T) {
 }
 
 func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
+	fixture := newOperationStoreTestFixture(t)
+
 	tests := []struct {
 		name          string
 		workerID      string
 		limit         int
 		maxAttempts   int
 		leaseDuration time.Duration
+		wantError     string
 	}{
 		{
 			name:          "empty worker",
@@ -296,6 +299,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			limit:         1,
 			maxAttempts:   3,
 			leaseDuration: time.Minute,
+			wantError:     "worker ID is required",
 		},
 		{
 			name:          "zero limit",
@@ -303,6 +307,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			limit:         0,
 			maxAttempts:   3,
 			leaseDuration: time.Minute,
+			wantError:     "claim limit must be between 1 and 1000",
 		},
 		{
 			name:          "limit too large",
@@ -310,6 +315,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			limit:         1001,
 			maxAttempts:   3,
 			leaseDuration: time.Minute,
+			wantError:     "claim limit must be between 1 and 1000",
 		},
 		{
 			name:          "zero attempts",
@@ -317,6 +323,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			limit:         1,
 			maxAttempts:   0,
 			leaseDuration: time.Minute,
+			wantError:     "maximum attempts must be between 1 and 2147483647",
 		},
 		{
 			name:          "lease too short",
@@ -324,6 +331,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			limit:         1,
 			maxAttempts:   3,
 			leaseDuration: time.Nanosecond,
+			wantError:     "lease duration must be at least one microsecond",
 		},
 	}
 
@@ -331,7 +339,7 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := claimOutboxEvents(
 				context.Background(),
-				nil,
+				fixture.pool,
 				test.workerID,
 				test.limit,
 				test.maxAttempts,
@@ -339,6 +347,13 @@ func TestClaimOutboxEventsValidatesArguments(t *testing.T) {
 			)
 			if err == nil {
 				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf(
+					"error = %q, want it to contain %q",
+					err.Error(),
+					test.wantError,
+				)
 			}
 		})
 	}
