@@ -1,4 +1,4 @@
-name: Go validation
+name: NEXVARIN validation
 
 on:
   push:
@@ -13,8 +13,23 @@ permissions:
 
 jobs:
   validate:
-    name: Format, build, and test
+    name: Go and PostgreSQL validation
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: nexvarin_test
+          POSTGRES_USER: nexvarin_test
+          POSTGRES_PASSWORD: nexvarin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexvarin_test -d nexvarin_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
       - name: Check out repository
@@ -42,6 +57,99 @@ jobs:
             printf 'These Go files need formatting:\n%s\n' "$unformatted"
             exit 1
           fi
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+
+      - name: Apply and verify control-plane migrations
+        shell: bash
+        env:
+          TEST_DATABASE_URL: postgresql://nexvarin_test:nexvarin_test@127.0.0.1:5432/nexvarin_test?sslmode=disable
+        run: |
+          shopt -s nullglob
+          migrations=(db/migrations/*.sql)
+
+          if [ "${#migrations[@]}" -eq 0 ]; then
+            echo "No SQL migrations were found."
+            exit 1
+          fi
+
+          for migration in "${migrations[@]}"; do
+            echo "Applying ${migration}"
+
+            psql "$TEST_DATABASE_URL" \
+              --no-psqlrc \
+              --set=ON_ERROR_STOP=1 \
+              --single-transaction \
+              --file="$migration"
+          done
+
+          psql "$TEST_DATABASE_URL" \
+            --no-psqlrc \
+            --set=ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            required_tables text[] := ARRAY[
+              'projects',
+              'repositories',
+              'operations',
+              'operation_events',
+              'outbox_events',
+              'artifacts',
+              'deployments',
+              'audit_events'
+            ];
+            required_indexes text[] := ARRAY[
+              'operations_idempotency_unique',
+              'operations_due_queue_idx',
+              'outbox_pending_delivery_idx',
+              'artifacts_build_digest_unique'
+            ];
+            item text;
+          BEGIN
+            FOREACH item IN ARRAY required_tables LOOP
+              IF to_regclass(format('public.%I', item)) IS NULL THEN
+                RAISE EXCEPTION
+                  'Required table public.% is missing', item;
+              END IF;
+            END LOOP;
+
+            FOREACH item IN ARRAY required_indexes LOOP
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_indexes
+                WHERE schemaname = 'public'
+                  AND indexname = item
+              ) THEN
+                RAISE EXCEPTION
+                  'Required index % is missing', item;
+              END IF;
+            END LOOP;
+
+            IF NOT EXISTS (
+              SELECT 1
+              FROM pg_constraint
+              WHERE conname = 'operations_parent_same_repository_fk'
+            ) THEN
+              RAISE EXCEPTION
+                'Repository-scoped parent constraint is missing';
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+              FROM pg_constraint
+              WHERE conname = 'operations_reconcile_requires_parent'
+            ) THEN
+              RAISE EXCEPTION
+                'Reconciliation parent constraint is missing';
+            END IF;
+          END
+          $$;
+          SQL
+
+          echo "PostgreSQL migrations and schema checks passed."
 
       - name: Resolve Go dependencies
         run: go mod tidy
