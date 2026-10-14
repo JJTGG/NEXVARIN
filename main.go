@@ -84,29 +84,9 @@ func run() error {
 
 	operationAuthorizer := newPostgresOperationCreationAuthorizer(pool)
 
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("GET /health/live", func(
-		w http.ResponseWriter,
-		_ *http.Request,
-	) {
-		writeHealth(w, http.StatusOK, "ok")
-	})
-
-	mux.HandleFunc("GET /health/ready", readinessHandler(pool))
-
-	mux.Handle(
-		"POST /v1/projects/{projectId}/repositories/{repositoryId}/operations",
-		createRepositoryOperationHandler(
-			pool,
-			operationAuthenticator,
-			operationAuthorizer,
-		),
-	)
-
 	server := &http.Server{
 		Addr:              listenAddress,
-		Handler:           mux,
+		Handler:           newHTTPHandler(pool, operationAuthenticator, operationAuthorizer),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -169,6 +149,34 @@ func run() error {
 		slog.Info("control API stopped cleanly")
 		return nil
 	}
+}
+
+func newHTTPHandler(
+	pool *pgxpool.Pool,
+	operationAuthenticator operationHTTPAuthenticator,
+	operationAuthorizer operationCreationAuthorizer,
+) http.Handler {
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("GET /health/live", func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		writeHealth(w, http.StatusOK, "ok")
+	})
+
+	mux.HandleFunc("GET /health/ready", readinessHandler(pool))
+
+	mux.Handle(
+		"POST /v1/projects/{projectId}/repositories/{repositoryId}/operations",
+		createRepositoryOperationHandler(
+			pool,
+			operationAuthenticator,
+			operationAuthorizer,
+		),
+	)
+
+	return mux
 }
 
 func readinessHandler(pool *pgxpool.Pool) http.HandlerFunc {
