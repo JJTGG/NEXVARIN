@@ -217,9 +217,9 @@ func getOperationHandler(
 			if errors.Is(err, errOperationReadForbidden) {
 				writeOperationProblem(
 					w,
-					http.StatusForbidden,
-					"Operation inspection is forbidden",
-					"forbidden",
+					http.StatusNotFound,
+					"Operation not found",
+					"not_found",
 					"",
 				)
 				return
