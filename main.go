@@ -21,9 +21,9 @@ const (
 	defaultListenAddress = "127.0.0.1:8080"
 	defaultWorkerID      = "nexvarin-worker"
 
-	databasePingTimeout  = 2 * time.Second
-	shutdownTimeout      = 10 * time.Second
-	maxDatabaseConns     = 4
+	databasePingTimeout = 2 * time.Second
+	shutdownTimeout     = 10 * time.Second
+	maxDatabaseConns    = 4
 
 	operationWorkerLeaseDuration     = 2 * time.Minute
 	operationWorkerHeartbeatInterval = 15 * time.Second
@@ -266,10 +266,10 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 	worker := operationWorkerRunner{
 		Pool:              pool,
 		WorkerID:          workerID,
-		Executor:           executor,
-		LeaseDuration:      operationWorkerLeaseDuration,
+		Executor:          executor,
+		LeaseDuration:     operationWorkerLeaseDuration,
 		HeartbeatInterval: operationWorkerHeartbeatInterval,
-		PollInterval:       operationWorkerPollInterval,
+		PollInterval:      operationWorkerPollInterval,
 	}
 
 	signalContext, stopSignals := signal.NotifyContext(
