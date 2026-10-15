@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -18,9 +19,15 @@ import (
 
 const (
 	defaultListenAddress = "127.0.0.1:8080"
+	defaultWorkerID      = "nexvarin-worker"
+
 	databasePingTimeout  = 2 * time.Second
 	shutdownTimeout      = 10 * time.Second
 	maxDatabaseConns     = 4
+
+	operationWorkerLeaseDuration     = 2 * time.Minute
+	operationWorkerHeartbeatInterval = 15 * time.Second
+	operationWorkerPollInterval      = time.Second
 )
 
 type healthResponse struct {
@@ -32,23 +39,25 @@ func main() {
 	slog.SetDefault(logger)
 
 	if err := run(); err != nil {
-		slog.Error("NEXVARIN control API stopped with an error", "error", err)
+		slog.Error("NEXVARIN process stopped with an error", "error", err)
 		os.Exit(1)
 	}
 }
 
 func run() error {
-	listenAddress := strings.TrimSpace(
-		os.Getenv("NEXVARIN_LISTEN_ADDR"),
-	)
-	if listenAddress == "" {
-		listenAddress = defaultListenAddress
+	processKind, err := operationProcessKindFromEnvironment()
+	if err != nil {
+		return err
 	}
 
 	var pool *pgxpool.Pool
 
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if databaseURL == "" {
+		if processKind == "worker" {
+			return errors.New("DATABASE_URL is required in worker mode")
+		}
+
 		slog.Warn(
 			"DATABASE_URL is not set; readiness will report unavailable",
 		)
@@ -77,16 +86,58 @@ func run() error {
 		defer pool.Close()
 	}
 
-	operationAuthenticator, err := loadOperationHTTPAuthenticatorFromEnvironment()
+	if processKind == "worker" {
+		return runOperationWorkerProcess(pool)
+	}
+
+	return runControlAPIProcess(pool)
+}
+
+func operationProcessKindFromEnvironment() (string, error) {
+	processKind := strings.ToLower(
+		strings.TrimSpace(os.Getenv("NEXVARIN_PROCESS")),
+	)
+
+	if processKind == "" {
+		processKind = "api"
+	}
+
+	switch processKind {
+	case "api", "worker":
+		return processKind, nil
+	default:
+		return "", errors.New(
+			"NEXVARIN_PROCESS must be either api or worker",
+		)
+	}
+}
+
+func runControlAPIProcess(pool *pgxpool.Pool) error {
+	listenAddress := strings.TrimSpace(
+		os.Getenv("NEXVARIN_LISTEN_ADDR"),
+	)
+	if listenAddress == "" {
+		listenAddress = defaultListenAddress
+	}
+
+	operationAuthenticator, err :=
+		loadOperationHTTPAuthenticatorFromEnvironment()
 	if err != nil {
-		return fmt.Errorf("configure operation authentication: %w", err)
+		return fmt.Errorf(
+			"configure operation authentication: %w",
+			err,
+		)
 	}
 
 	operationAuthorizer := newPostgresOperationCreationAuthorizer(pool)
 
 	server := &http.Server{
-		Addr:              listenAddress,
-		Handler:           newHTTPHandler(pool, operationAuthenticator, operationAuthorizer),
+		Addr: listenAddress,
+		Handler: newHTTPHandler(
+			pool,
+			operationAuthenticator,
+			operationAuthorizer,
+		),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -107,6 +158,8 @@ func run() error {
 			"control API listening",
 			"address",
 			listenAddress,
+			"process",
+			"api",
 		)
 
 		err := server.ListenAndServe()
@@ -126,7 +179,7 @@ func run() error {
 		return nil
 
 	case <-signalContext.Done():
-		slog.Info("shutdown signal received")
+		slog.Info("control API shutdown signal received")
 
 		shutdownContext, cancel := context.WithTimeout(
 			context.Background(),
@@ -151,6 +204,99 @@ func run() error {
 	}
 }
 
+func runOperationWorkerProcess(pool *pgxpool.Pool) error {
+	if pool == nil {
+		return errors.New("database pool is required in worker mode")
+	}
+
+	workerID := strings.TrimSpace(
+		os.Getenv("NEXVARIN_WORKER_ID"),
+	)
+	if workerID == "" {
+		workerID = defaultWorkerID
+	}
+
+	workerID, err := normalizeOperationWorkerID(workerID)
+	if err != nil {
+		return fmt.Errorf("configure worker ID: %w", err)
+	}
+
+	buildctlPath := strings.TrimSpace(
+		os.Getenv("NEXVARIN_BUILDKIT_PATH"),
+	)
+	if buildctlPath == "" {
+		buildctlPath = "buildctl"
+	}
+
+	resolvedBuildctl, err := exec.LookPath(buildctlPath)
+	if err != nil {
+		return errors.New(
+			"BuildKit client executable was not found; configure NEXVARIN_BUILDKIT_PATH",
+		)
+	}
+
+	buildkitAddress, err := validateOperationWorkerBuildkitAddress(
+		os.Getenv("NEXVARIN_BUILDKIT_ADDRESS"),
+	)
+	if err != nil {
+		return fmt.Errorf("configure BuildKit address: %w", err)
+	}
+
+	artifactDirectory, err := prepareOperationWorkerArtifactDirectory(
+		os.Getenv("NEXVARIN_ARTIFACT_DIRECTORY"),
+	)
+	if err != nil {
+		return fmt.Errorf("configure artifact storage: %w", err)
+	}
+
+	buildExecutor := operationWorkerBuildExecutor{
+		Pool:              pool,
+		BuildctlPath:      resolvedBuildctl,
+		BuildkitAddress:   buildkitAddress,
+		ArtifactDirectory: artifactDirectory,
+		BuildTimeout:      operationWorkerBuildTimeout,
+	}
+
+	executor := newOperationExecutorMux(
+		map[operationType]operationExecutor{
+			operationTypeBuild: buildExecutor,
+		},
+	)
+
+	worker := operationWorkerRunner{
+		Pool:              pool,
+		WorkerID:          workerID,
+		Executor:           executor,
+		LeaseDuration:      operationWorkerLeaseDuration,
+		HeartbeatInterval: operationWorkerHeartbeatInterval,
+		PollInterval:       operationWorkerPollInterval,
+	}
+
+	signalContext, stopSignals := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stopSignals()
+
+	slog.Info(
+		"operation worker starting",
+		"worker_id",
+		workerID,
+		"poll_interval",
+		operationWorkerPollInterval.String(),
+		"lease_duration",
+		operationWorkerLeaseDuration.String(),
+	)
+
+	if err := worker.Run(signalContext); err != nil {
+		return fmt.Errorf("run operation worker: %w", err)
+	}
+
+	slog.Info("operation worker stopped cleanly")
+	return nil
+}
+
 func newHTTPHandler(
 	pool *pgxpool.Pool,
 	operationAuthenticator operationHTTPAuthenticator,
@@ -165,7 +311,7 @@ func newHTTPHandler(
 		writeHealth(w, http.StatusOK, "ok")
 	})
 
-	mux.HandleFunc("GET /health/ready", readinessHandler(pool))
+	mux.Handle("GET /health/ready", readinessHandler(pool))
 
 	mux.Handle(
 		"POST /v1/projects/{projectId}/repositories/{repositoryId}/operations",
