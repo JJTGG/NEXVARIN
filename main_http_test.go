@@ -314,8 +314,9 @@ func TestNewHTTPHandlerRejectsUnsupportedOperationReadMethod(
 		)
 	}
 
-	if got := response.Header().Get("Allow"); got != http.MethodGet {
-		t.Errorf("Allow header = %q, want GET", got)
+	const wantAllow = http.MethodGet + ", HEAD"
+	if got := response.Header().Get("Allow"); got != wantAllow {
+		t.Errorf("Allow header = %q, want %q", got, wantAllow)
 	}
 }
 
