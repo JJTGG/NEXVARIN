@@ -13,9 +13,9 @@ import (
 type operationExecutionDisposition string
 
 const (
-	operationExecutionSucceeded            operationExecutionDisposition = "succeeded"
-	operationExecutionRetry                operationExecutionDisposition = "retry"
-	operationExecutionFailed               operationExecutionDisposition = "failed"
+	operationExecutionSucceeded           operationExecutionDisposition = "succeeded"
+	operationExecutionRetry               operationExecutionDisposition = "retry"
+	operationExecutionFailed              operationExecutionDisposition = "failed"
 	operationExecutionNeedsReconciliation operationExecutionDisposition = "needs_reconciliation"
 )
 
