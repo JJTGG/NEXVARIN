@@ -6,10 +6,10 @@ import (
 
 func TestOperationProcessKindFromEnvironment(t *testing.T) {
 	tests := []struct {
-		name        string
-		value       string
-		want        string
-		wantErr     bool
+		name    string
+		value   string
+		want    string
+		wantErr bool
 	}{
 		{
 			name:  "defaults to API mode",
