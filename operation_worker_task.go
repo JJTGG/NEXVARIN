@@ -60,16 +60,16 @@ func loadClaimedOperationTask(
 	}()
 
 	var (
-		projectID              string
-		repositoryID            string
-		operationTypeValue      string
-		status                  string
-		leaseOwner              pgtype.Text
-		leaseExpiry             pgtype.Timestamptz
-		requestPayload          []byte
-		requestFingerprint      string
-		sourceRevision          pgtype.Text
-		parentOperationID       pgtype.Text
+		projectID          string
+		repositoryID       string
+		operationTypeValue string
+		status             string
+		leaseOwner         pgtype.Text
+		leaseExpiry        pgtype.Timestamptz
+		requestPayload     []byte
+		requestFingerprint string
+		sourceRevision     pgtype.Text
+		parentOperationID  pgtype.Text
 	)
 
 	err = tx.QueryRow(ctx, `
