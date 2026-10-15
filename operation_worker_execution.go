@@ -13,12 +13,10 @@ import (
 type operationExecutionDisposition string
 
 const (
-	operationExecutionSucceeded operationExecutionDisposition = "succeeded"
-	operationExecutionRetry     operationExecutionDisposition = "retry"
-	operationExecutionFailed    operationExecutionDisposition = "failed"
-
-	operationExecutionNeedsReconciliation operationExecutionDisposition =
-		"needs_reconciliation"
+	operationExecutionSucceeded            operationExecutionDisposition = "succeeded"
+	operationExecutionRetry                operationExecutionDisposition = "retry"
+	operationExecutionFailed               operationExecutionDisposition = "failed"
+	operationExecutionNeedsReconciliation operationExecutionDisposition = "needs_reconciliation"
 )
 
 // operationExecutionResult is the executor's classification of an attempt.
@@ -27,10 +25,10 @@ const (
 // If an external side effect may have occurred and its outcome is uncertain,
 // the executor must return operationExecutionNeedsReconciliation instead.
 type operationExecutionResult struct {
-	Disposition operationExecutionDisposition
-	ErrorCode   string
+	Disposition  operationExecutionDisposition
+	ErrorCode    string
 	ErrorSummary string
-	RetryDelay  time.Duration
+	RetryDelay   time.Duration
 }
 
 // operationExecutor executes a validated, claimed task.
