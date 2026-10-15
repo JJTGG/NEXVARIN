@@ -110,6 +110,32 @@ func retryOperation(
 	)
 }
 
+// markOperationNeedsReconciliation records an uncertain execution outcome.
+//
+// Use this when the executor cannot establish whether an external side
+// effect occurred. The operation leaves the normal execution queue and
+// retains its error reason for reconciliation. It is not automatically
+// retried, and finished_at remains NULL because the outcome is unresolved.
+func markOperationNeedsReconciliation(
+	ctx context.Context,
+	pool *pgxpool.Pool,
+	operationID string,
+	leaseOwner string,
+	errorCode string,
+	errorSummary string,
+) (operationRecord, error) {
+	return recordOperationOutcome(
+		ctx,
+		pool,
+		operationID,
+		leaseOwner,
+		operationStatusNeedsReconciliation,
+		errorCode,
+		errorSummary,
+		0,
+	)
+}
+
 func recordOperationOutcome(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -138,12 +164,14 @@ func recordOperationOutcome(
 
 	if requestedStatus != operationStatusSucceeded &&
 		requestedStatus != operationStatusFailed &&
-		requestedStatus != operationStatusRetryWait {
+		requestedStatus != operationStatusRetryWait &&
+		requestedStatus != operationStatusNeedsReconciliation {
 		return empty, errors.New("operation outcome status is invalid")
 	}
 
 	if requestedStatus == operationStatusFailed ||
-		requestedStatus == operationStatusRetryWait {
+		requestedStatus == operationStatusRetryWait ||
+		requestedStatus == operationStatusNeedsReconciliation {
 		errorCode, errorSummary, err = normalizeOperationFailure(
 			errorCode,
 			errorSummary,
@@ -211,9 +239,9 @@ func recordOperationOutcome(
 		return empty, errOperationLeaseNotOwned
 	}
 
-	// This query intentionally occurs after SELECT FOR UPDATE has acquired
-	// the row lock. PostgreSQL now() is fixed at transaction start and could
-	// otherwise treat a lease as valid after a long lock wait.
+	// Check expiry after acquiring the row lock. PostgreSQL now() is fixed
+	// at transaction start and could otherwise treat an expired lease as
+	// valid after a long lock wait.
 	var leaseIsCurrent bool
 	if err := tx.QueryRow(ctx, `
 		SELECT lease_expires_at > clock_timestamp()
@@ -266,7 +294,8 @@ func recordOperationOutcome(
 				ELSE NULLIF($5, '')
 			END,
 			finished_at = CASE
-				WHEN $3 IN ('succeeded', 'failed') THEN clock_timestamp()
+				WHEN $3 IN ('succeeded', 'failed')
+					THEN clock_timestamp()
 				ELSE NULL
 			END,
 			updated_at = clock_timestamp()
@@ -362,6 +391,8 @@ func operationOutcomeEventType(status operationStatus) string {
 		return "operation.retry_scheduled"
 	case operationStatusFailed:
 		return "operation.failed"
+	case operationStatusNeedsReconciliation:
+		return "operation.needs_reconciliation"
 	default:
 		return "operation.outcome_unknown"
 	}
