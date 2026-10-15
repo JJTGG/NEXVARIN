@@ -322,6 +322,15 @@ func newHTTPHandler(
 		),
 	)
 
+	mux.Handle(
+		"GET /v1/operations/{operationId}",
+		getOperationHandler(
+			pool,
+			operationAuthenticator,
+			newPostgresOperationReadAuthorizer(pool),
+		),
+	)
+
 	return mux
 }
 
