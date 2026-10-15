@@ -45,8 +45,8 @@ func TestRecordOperationExecutionResultIntegrationMapsDispositions(
 		wantRetryScheduled bool
 	}{
 		{
-			name:       "success",
-			result:     operationExecutionResult{
+			name: "success",
+			result: operationExecutionResult{
 				Disposition: operationExecutionSucceeded,
 			},
 			wantStatus:     operationStatusSucceeded,
@@ -56,10 +56,10 @@ func TestRecordOperationExecutionResultIntegrationMapsDispositions(
 		{
 			name: "safe retry",
 			result: operationExecutionResult{
-				Disposition: operationExecutionRetry,
-				ErrorCode:   "temporary_build_failure",
+				Disposition:  operationExecutionRetry,
+				ErrorCode:    "temporary_build_failure",
 				ErrorSummary: "Builder stopped before producing an artifact",
-				RetryDelay:  45 * time.Second,
+				RetryDelay:   45 * time.Second,
 			},
 			wantStatus:         operationStatusRetryWait,
 			wantEvent:          "operation.retry_scheduled",
@@ -95,8 +95,8 @@ func TestRecordOperationExecutionResultIntegrationMapsDispositions(
 		{
 			name: "invalid retry result",
 			result: operationExecutionResult{
-				Disposition: operationExecutionRetry,
-				ErrorCode:   "",
+				Disposition:  operationExecutionRetry,
+				ErrorCode:    "",
 				ErrorSummary: "",
 			},
 			wantStatus:       operationStatusNeedsReconciliation,
@@ -117,7 +117,7 @@ func TestRecordOperationExecutionResultIntegrationMapsDispositions(
 		{
 			name: "success with contradictory metadata",
 			result: operationExecutionResult{
-				Disposition: operationExecutionSucceeded,
+				Disposition:  operationExecutionSucceeded,
 				ErrorSummary: "Unexpected error metadata",
 			},
 			wantStatus:       operationStatusNeedsReconciliation,
