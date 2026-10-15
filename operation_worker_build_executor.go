@@ -49,7 +49,7 @@ type operationWorkerOCILayoutDocument struct {
 }
 
 type operationWorkerOCIIndexDocument struct {
-	SchemaVersion int                           `json:"schemaVersion"`
+	SchemaVersion int                            `json:"schemaVersion"`
 	Manifests     []operationWorkerOCIDescriptor `json:"manifests"`
 }
 
@@ -361,8 +361,6 @@ func (executor operationWorkerBuildExecutor) Execute(
 	).Scan(&artifactID)
 
 	if err != nil || artifactID == "" {
-		// The file already exists under its content digest. Reconciliation
-		// can inspect it and finish registration without rebuilding blindly.
 		return reconciliationBuildResult(
 			"artifact_registration_uncertain",
 			"The artifact was published but database registration could not be confirmed.",
@@ -395,9 +393,6 @@ func validateOperationWorkerBuildkitAddress(
 		return "", errors.New("invalid BuildKit address")
 	}
 
-	// The first host implementation deliberately uses only a local Unix
-	// socket. Remote TCP builders need an explicit authenticated transport
-	// and network policy before being enabled.
 	if parsed.Scheme != "unix" ||
 		parsed.Host != "" ||
 		parsed.User != nil ||
@@ -493,9 +488,6 @@ func runOperationWorkerBuildKit(
 		"type=oci,dest="+outputPath,
 	)
 
-	// Do not inherit credentials or arbitrary user build-client settings.
-	// Build logs are not forwarded because user-controlled build output may
-	// contain sensitive values. A separate redacted logging path is needed.
 	command.Env = []string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + homeDirectory,
@@ -521,12 +513,6 @@ func runOperationWorkerBuildKit(
 	return nil
 }
 
-// inspectOperationWorkerOCIArchive verifies that the output is a regular
-// OCI image-layout tar archive, that its index is valid, and that every
-// index manifest references a blob included in the archive.
-//
-// ArchiveDigest is the SHA-256 digest of the complete tar file. IndexDigest
-// separately identifies the exact index.json bytes.
 func inspectOperationWorkerOCIArchive(
 	archivePath string,
 ) (operationWorkerOCIArchiveMetadata, error) {
