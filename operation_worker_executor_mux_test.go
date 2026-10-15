@@ -31,8 +31,8 @@ func TestOperationExecutorMuxRoutesToMatchingExecutor(
 	}
 	deployExecutor := &operationExecutorMuxTestExecutor{
 		result: operationExecutionResult{
-			Disposition: operationExecutionRetry,
-			ErrorCode:   "temporary_deploy_failure",
+			Disposition:  operationExecutionRetry,
+			ErrorCode:    "temporary_deploy_failure",
 			ErrorSummary: "Deployment could not start.",
 		},
 	}
@@ -120,8 +120,8 @@ func TestOperationExecutorMuxCopiesRegistrationMap(
 	}
 	replacement := &operationExecutorMuxTestExecutor{
 		result: operationExecutionResult{
-			Disposition: operationExecutionFailed,
-			ErrorCode:   "replacement_executor",
+			Disposition:  operationExecutionFailed,
+			ErrorCode:    "replacement_executor",
 			ErrorSummary: "Replacement executor was called.",
 		},
 	}
