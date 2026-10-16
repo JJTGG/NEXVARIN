@@ -266,7 +266,7 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 	worker := operationWorkerRunner{
 		Pool:              pool,
 		WorkerID:          workerID,
-		Executor:          executor,
+		Executor:           executor,
 		LeaseDuration:     operationWorkerLeaseDuration,
 		HeartbeatInterval: operationWorkerHeartbeatInterval,
 		PollInterval:      operationWorkerPollInterval,
@@ -319,6 +319,15 @@ func newHTTPHandler(
 			pool,
 			operationAuthenticator,
 			operationAuthorizer,
+		),
+	)
+
+	mux.Handle(
+		"GET /v1/projects/{projectId}/repositories/{repositoryId}/operations",
+		listRepositoryOperationsHandler(
+			pool,
+			operationAuthenticator,
+			newPostgresOperationListAuthorizer(pool),
 		),
 	)
 
