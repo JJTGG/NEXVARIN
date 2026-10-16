@@ -266,7 +266,7 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 	worker := operationWorkerRunner{
 		Pool:              pool,
 		WorkerID:          workerID,
-		Executor:           executor,
+		Executor:          executor,
 		LeaseDuration:     operationWorkerLeaseDuration,
 		HeartbeatInterval: operationWorkerHeartbeatInterval,
 		PollInterval:      operationWorkerPollInterval,
