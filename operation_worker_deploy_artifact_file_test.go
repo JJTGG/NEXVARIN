@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -14,14 +15,18 @@ func newDeployArtifactFileFixture(
 	t.Helper()
 
 	root := t.TempDir()
-	digestDirectory := filepath.Join(root, "sha256")
 
+	// Ensure the test directory has private permissions.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("make artifact root directory private: %v", err)
+	}
+
+	digestDirectory := filepath.Join(root, "sha256")
 	if err := os.Mkdir(digestDirectory, 0o700); err != nil {
 		t.Fatalf("create artifact digest directory: %v", err)
 	}
 
 	stagingPath := filepath.Join(root, "staging.oci.tar")
-
 	writeTestOCIArchive(
 		t,
 		stagingPath,
@@ -39,7 +44,6 @@ func newDeployArtifactFileFixture(
 		archiveMetadata.ArchiveDigest,
 		"sha256:",
 	)
-
 	artifactPath := filepath.Join(
 		digestDirectory,
 		digestHex+".oci.tar",
@@ -77,11 +81,7 @@ func TestVerifyOperationWorkerDeployArtifactFileAcceptsValidArchive(
 	}
 
 	if gotPath != wantPath {
-		t.Errorf(
-			"verified path = %q, want %q",
-			gotPath,
-			wantPath,
-		)
+		t.Errorf("verified path = %q, want %q", gotPath, wantPath)
 	}
 }
 
@@ -141,7 +141,8 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsInvalidMetadata(
 				_ string,
 				artifact *operationWorkerDeployArtifact,
 			) {
-				artifact.Metadata.ContentDigestScope = "oci-index-only"
+				artifact.Metadata.ContentDigestScope =
+					"oci-index-only"
 			},
 		},
 		{
@@ -159,7 +160,6 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsInvalidMetadata(
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root, artifact, _ := newDeployArtifactFileFixture(t)
-
 			test.mutate(root, &artifact)
 
 			_, err := verifyOperationWorkerDeployArtifactFile(
@@ -188,10 +188,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsMissingFile(
 		t.Fatalf("remove test artifact: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileUnavailable,
@@ -236,10 +233,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsCorruptArchive(
 		t.Fatalf("corrupt test artifact: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -271,10 +265,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsFileSymlink(
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -302,10 +293,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsDirectorySymlink(
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -326,10 +314,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsPermissiveFile(
 		t.Fatalf("change artifact permissions: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -350,10 +335,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsPermissiveDirectory(
 		t.Fatalf("change artifact directory permissions: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -369,17 +351,13 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsPermissiveDigestDirectory
 	t *testing.T,
 ) {
 	root, artifact, _ := newDeployArtifactFileFixture(t)
-
 	digestDirectory := filepath.Join(root, "sha256")
 
 	if err := os.Chmod(digestDirectory, 0o755); err != nil {
 		t.Fatalf("change digest directory permissions: %v", err)
 	}
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		root,
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(root, artifact)
 	if !errors.Is(
 		err,
 		errOperationWorkerDeployArtifactFileIntegrity,
@@ -396,10 +374,7 @@ func TestVerifyOperationWorkerDeployArtifactFileRejectsEmptyDirectory(
 ) {
 	_, artifact, _ := newDeployArtifactFileFixture(t)
 
-	_, err := verifyOperationWorkerDeployArtifactFile(
-		" ",
-		artifact,
-	)
+	_, err := verifyOperationWorkerDeployArtifactFile(" ", artifact)
 	if err == nil {
 		t.Fatal("expected empty artifact directory to be rejected")
 	}
