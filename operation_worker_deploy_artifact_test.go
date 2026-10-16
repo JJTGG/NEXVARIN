@@ -241,7 +241,11 @@ func TestLoadOperationWorkerDeployArtifactIntegrationRejectsUnverifiedArtifact(
 	t *testing.T,
 ) {
 	fixture := newOperationStoreTestFixture(t)
-	artifact := insertDeployArtifactForTest(t, fixture, "pending")
+
+	// Deployment creation requires a verified artifact.
+	// Create a valid deployment first, then simulate the artifact
+	// becoming unverified before the worker attempts to load it.
+	artifact := insertDeployArtifactForTest(t, fixture, "verified")
 
 	task := createClaimedDeployTaskForArtifactTest(
 		t,
@@ -255,7 +259,24 @@ func TestLoadOperationWorkerDeployArtifactIntegrationRejectsUnverifiedArtifact(
 	)
 	defer cancel()
 
-	_, err := loadOperationWorkerDeployArtifact(
+	result, err := fixture.pool.Exec(ctx, `
+		UPDATE artifacts
+		SET verification_status = 'pending',
+		    verified_at = NULL
+		WHERE id = $1::uuid
+	`, artifact.ID)
+	if err != nil {
+		t.Fatalf("change artifact verification state: %v", err)
+	}
+
+	if result.RowsAffected() != 1 {
+		t.Fatalf(
+			"artifact update affected %d rows, want 1",
+			result.RowsAffected(),
+		)
+	}
+
+	_, err = loadOperationWorkerDeployArtifact(
 		ctx,
 		fixture.pool,
 		task,
@@ -277,17 +298,29 @@ func TestLoadOperationWorkerDeployArtifactIntegrationRejectsOtherRepository(
 	localFixture := newOperationStoreTestFixture(t)
 	otherFixture := newOperationStoreTestFixture(t)
 
+	// Both repositories have valid artifacts.
+	localArtifact := insertDeployArtifactForTest(
+		t,
+		localFixture,
+		"verified",
+	)
+
 	foreignArtifact := insertDeployArtifactForTest(
 		t,
 		otherFixture,
 		"verified",
 	)
 
+	// Create a legitimate deployment for the local artifact.
 	task := createClaimedDeployTaskForArtifactTest(
 		t,
 		localFixture,
-		foreignArtifact.ID,
+		localArtifact.ID,
 	)
+
+	// Simulate a mismatched artifact ID reaching the loader.
+	// The loader must enforce repository scope independently.
+	task.Request.ArtifactID = foreignArtifact.ID
 
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
