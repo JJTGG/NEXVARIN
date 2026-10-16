@@ -15,9 +15,10 @@ info:
     environment. They are not the final multi-user authentication system.
     Do not expose this API to untrusted networks.
 
-    Operation listing, inspection, and cancellation remain planned contract
-    entries. They must not be considered available until their handlers
-    are implemented, registered, and tested.
+    Operation creation, listing, and inspection are implemented,
+    registered, and covered by tests. Operation cancellation remains
+    planned and must not be considered available until its handler is
+    implemented, registered, and tested.
 
     Project and repository registration are handled through controlled
     bootstrap during the initial slice.
@@ -78,6 +79,14 @@ paths:
       tags: [Operations]
       operationId: listRepositoryOperations
       summary: List operations for a registered repository
+      description: |
+        Returns operations in reverse creation order. The cursor is opaque
+        to clients and should be passed back unchanged to retrieve the next
+        page.
+
+        The caller must own the project containing the repository. A
+        project or repository that is missing or outside the caller's
+        authorized scope is reported as not found.
       security:
         - bearerAuth: []
       parameters:
@@ -106,14 +115,14 @@ paths:
                 $ref: "#/components/schemas/OperationList"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/InvalidRequest"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 
     post:
       tags: [Operations]
@@ -220,8 +229,13 @@ paths:
       operationId: getOperation
       summary: Inspect an operation
       description: |
-        The caller must be authorized to inspect the project containing
-        the operation. An operation identifier is not an authorization token.
+        Returns the current persisted state of an operation.
+
+        The caller must own the project containing the operation. An
+        operation that does not exist or belongs to another owner's project
+        is returned as not found, so the endpoint does not disclose whether
+        an inaccessible operation exists. An operation identifier is not
+        an authorization token.
       security:
         - bearerAuth: []
       responses:
@@ -233,12 +247,14 @@ paths:
                 $ref: "#/components/schemas/Operation"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
 
   /v1/operations/{operationId}/cancel:
     parameters:
@@ -249,7 +265,10 @@ paths:
       operationId: cancelOperation
       summary: Request cancellation of an operation
       description: |
-        Cancellation is a request, not proof that work has stopped.
+        Cancellation is planned and is not currently available.
+
+        When implemented, cancellation must be treated as a request, not
+        proof that work has stopped.
 
         A running operation may transition to cancel_requested. The API
         must not report cancelled until the worker has established that
