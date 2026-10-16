@@ -177,11 +177,11 @@ func (executor operationWorkerDeployExecutor) Execute(
 	runtimeResult, err := executor.Runtime.Deploy(
 		ctx,
 		operationWorkerDeployRuntimeRequest{
-			OperationID:      task.Claimed.Operation.ID,
-			DeploymentID:     deployment.ID,
-			ArtifactPath:     artifactPath,
-			ArtifactDigest:   artifact.ContentDigest,
-			ImageReference:   artifact.Metadata.ImageReference,
+			OperationID:    task.Claimed.Operation.ID,
+			DeploymentID:   deployment.ID,
+			ArtifactPath:   artifactPath,
+			ArtifactDigest: artifact.ContentDigest,
+			ImageReference: artifact.Metadata.ImageReference,
 		},
 	)
 	if err != nil {
@@ -385,7 +385,7 @@ func recordOperationWorkerDeployRuntimeResult(
 	}()
 
 	var (
-		status    string
+		status     string
 		leaseOwner string
 	)
 
