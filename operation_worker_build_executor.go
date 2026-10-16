@@ -53,8 +53,15 @@ type operationWorkerOCIIndexDocument struct {
 	Manifests     []operationWorkerOCIDescriptor `json:"manifests"`
 }
 
+type operationWorkerOCIManifestDocument struct {
+	SchemaVersion int                            `json:"schemaVersion"`
+	Config        operationWorkerOCIDescriptor   `json:"config"`
+	Layers        []operationWorkerOCIDescriptor `json:"layers"`
+}
+
 type operationWorkerOCIDescriptor struct {
 	Digest string `json:"digest"`
+	Size   int64  `json:"size"`
 }
 
 type operationWorkerBuildArtifactMetadata struct {
@@ -274,7 +281,7 @@ func (executor operationWorkerBuildExecutor) Execute(
 	if err != nil {
 		return failedBuildResult(
 			"invalid_build_artifact",
-			"BuildKit output failed OCI archive structural validation.",
+			"BuildKit output failed OCI archive structural and content-integrity validation.",
 		)
 	}
 
@@ -546,8 +553,13 @@ func inspectOperationWorkerOCIArchive(
 
 	reader := tar.NewReader(file)
 	entries := make(map[string]bool)
+	blobSizes := make(map[string]int64)
+	blobContents := make(map[string][]byte)
+
 	var layoutBytes []byte
 	var indexBytes []byte
+
+	const blobPrefix = "blobs/sha256/"
 
 	for {
 		header, err := reader.Next()
@@ -559,21 +571,38 @@ func inspectOperationWorkerOCIArchive(
 		}
 
 		name := strings.TrimPrefix(header.Name, "./")
+
+		if header.Typeflag == tar.TypeDir {
+			name = strings.TrimSuffix(name, "/")
+
+			// An explicit archive-root directory is harmless.
+			if name == "" || name == "." {
+				continue
+			}
+		}
+
 		cleanName := path.Clean(name)
 
 		if name == "" ||
 			path.IsAbs(name) ||
+			cleanName != name ||
 			cleanName == ".." ||
 			strings.HasPrefix(cleanName, "../") {
 			return empty, errors.New("OCI archive contains an invalid path")
 		}
 
+		isRegular := header.Typeflag == tar.TypeReg ||
+			header.Typeflag == tar.TypeRegA
+
+		if !isRegular && header.Typeflag != tar.TypeDir {
+			return empty, errors.New(
+				"OCI archive contains a non-regular, non-directory entry",
+			)
+		}
+
 		if _, duplicate := entries[name]; duplicate {
 			return empty, errors.New("OCI archive contains duplicate paths")
 		}
-
-		isRegular := header.Typeflag == tar.TypeReg ||
-			header.Typeflag == tar.TypeRegA
 		entries[name] = isRegular
 
 		switch name {
@@ -594,11 +623,84 @@ func inspectOperationWorkerOCIArchive(
 				)
 			}
 
+			if int64(len(content)) != header.Size {
+				return empty, errors.New(
+					"OCI layout metadata size does not match its tar header",
+				)
+			}
+
 			if name == "oci-layout" {
 				layoutBytes = content
 			} else {
 				indexBytes = content
 			}
+
+		default:
+			if !strings.HasPrefix(name, blobPrefix) {
+				continue
+			}
+
+			if !isRegular || strings.Count(name, "/") != 2 {
+				return empty, errors.New(
+					"OCI content-addressed blob path is invalid",
+				)
+			}
+
+			digestHex := strings.TrimPrefix(name, blobPrefix)
+			if len(digestHex) != sha256.Size*2 {
+				return empty, errors.New(
+					"OCI content-addressed blob digest is invalid",
+				)
+			}
+
+			decodedDigest, err := hex.DecodeString(digestHex)
+			if err != nil ||
+				len(decodedDigest) != sha256.Size ||
+				hex.EncodeToString(decodedDigest) != digestHex {
+				return empty, errors.New(
+					"OCI content-addressed blob digest is invalid",
+				)
+			}
+
+			blobHash := sha256.New()
+			var blobSize int64
+
+			if header.Size <= operationWorkerBuildMetadataLimit {
+				content, err := io.ReadAll(reader)
+				if err != nil {
+					return empty, fmt.Errorf(
+						"read OCI content-addressed blob: %w",
+						err,
+					)
+				}
+
+				blobSize = int64(len(content))
+				_, _ = blobHash.Write(content)
+				blobContents[name] = content
+			} else {
+				blobSize, err = io.Copy(blobHash, reader)
+				if err != nil {
+					return empty, fmt.Errorf(
+						"hash OCI content-addressed blob: %w",
+						err,
+					)
+				}
+			}
+
+			if blobSize != header.Size {
+				return empty, errors.New(
+					"OCI content-addressed blob size does not match its tar header",
+				)
+			}
+
+			actualDigest := hex.EncodeToString(blobHash.Sum(nil))
+			if actualDigest != digestHex {
+				return empty, errors.New(
+					"OCI content-addressed blob contents do not match their digest",
+				)
+			}
+
+			blobSizes[name] = blobSize
 		}
 	}
 
@@ -630,34 +732,62 @@ func inspectOperationWorkerOCIArchive(
 	}
 
 	for _, descriptor := range indexDocument.Manifests {
-		const digestPrefix = "sha256:"
-
-		if !strings.HasPrefix(descriptor.Digest, digestPrefix) {
-			return empty, errors.New(
-				"OCI index contains an unsupported manifest digest",
+		manifestPath, err := validateOperationWorkerOCIArchiveDescriptor(
+			descriptor,
+			entries,
+			blobSizes,
+		)
+		if err != nil {
+			return empty, fmt.Errorf(
+				"validate OCI index manifest: %w",
+				err,
 			)
 		}
 
-		hexDigest := strings.TrimPrefix(descriptor.Digest, digestPrefix)
-		if len(hexDigest) != 64 {
+		manifestBytes, ok := blobContents[manifestPath]
+		if !ok {
 			return empty, errors.New(
-				"OCI index contains an invalid manifest digest",
+				"OCI manifest exceeds the validation metadata limit",
 			)
 		}
 
-		decoded, err := hex.DecodeString(hexDigest)
-		if err != nil || len(decoded) != sha256.Size ||
-			hex.EncodeToString(decoded) != hexDigest {
+		var manifestDocument operationWorkerOCIManifestDocument
+		if err := json.Unmarshal(manifestBytes, &manifestDocument); err != nil {
+			return empty, errors.New("OCI image manifest is invalid")
+		}
+
+		if manifestDocument.SchemaVersion != 2 ||
+			manifestDocument.Layers == nil {
 			return empty, errors.New(
-				"OCI index contains an invalid manifest digest",
+				"OCI image manifest has an unsupported schema or missing layers",
 			)
 		}
 
-		blobPath := "blobs/sha256/" + hexDigest
-		if !entries[blobPath] {
-			return empty, errors.New(
-				"OCI index references a missing manifest blob",
-			)
+		referencedBlobs := make(
+			[]operationWorkerOCIDescriptor,
+			0,
+			1+len(manifestDocument.Layers),
+		)
+		referencedBlobs = append(
+			referencedBlobs,
+			manifestDocument.Config,
+		)
+		referencedBlobs = append(
+			referencedBlobs,
+			manifestDocument.Layers...,
+		)
+
+		for _, blobDescriptor := range referencedBlobs {
+			if _, err := validateOperationWorkerOCIArchiveDescriptor(
+				blobDescriptor,
+				entries,
+				blobSizes,
+			); err != nil {
+				return empty, fmt.Errorf(
+					"validate OCI manifest referenced blob: %w",
+					err,
+				)
+			}
 		}
 	}
 
@@ -668,6 +798,49 @@ func inspectOperationWorkerOCIArchive(
 		IndexDigest:   "sha256:" + hex.EncodeToString(indexHash[:]),
 		Size:          info.Size(),
 	}, nil
+}
+
+func validateOperationWorkerOCIArchiveDescriptor(
+	descriptor operationWorkerOCIDescriptor,
+	entries map[string]bool,
+	blobSizes map[string]int64,
+) (string, error) {
+	const digestPrefix = "sha256:"
+
+	if !strings.HasPrefix(descriptor.Digest, digestPrefix) ||
+		descriptor.Size < 0 {
+		return "", errors.New("OCI descriptor digest or size is invalid")
+	}
+
+	hexDigest := strings.TrimPrefix(descriptor.Digest, digestPrefix)
+	if len(hexDigest) != sha256.Size*2 {
+		return "", errors.New("OCI descriptor digest is invalid")
+	}
+
+	decoded, err := hex.DecodeString(hexDigest)
+	if err != nil ||
+		len(decoded) != sha256.Size ||
+		hex.EncodeToString(decoded) != hexDigest {
+		return "", errors.New("OCI descriptor digest is invalid")
+	}
+
+	blobPath := "blobs/sha256/" + hexDigest
+
+	isRegular, exists := entries[blobPath]
+	if !exists || !isRegular {
+		return "", errors.New(
+			"OCI descriptor references a missing or non-regular blob",
+		)
+	}
+
+	actualSize, exists := blobSizes[blobPath]
+	if !exists || actualSize != descriptor.Size {
+		return "", errors.New(
+			"OCI descriptor size does not match its referenced blob",
+		)
+	}
+
+	return blobPath, nil
 }
 
 func publishOperationWorkerArtifact(
