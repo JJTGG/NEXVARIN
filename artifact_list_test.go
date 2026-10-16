@@ -144,7 +144,7 @@ func TestListRepositoryArtifactsIntegrationPaginatesAndFiltersVerified(
 
 	var expectedIDs []string
 
-	for index, digestCharacter := range []string{"a", "b", "c"} {
+	for _, digestCharacter := range []string{"a", "b", "c"} {
 		imageReference := "localhost/nexvarin/build-" +
 			strings.Repeat(digestCharacter, 8) + ":latest"
 
@@ -161,7 +161,7 @@ func TestListRepositoryArtifactsIntegrationPaginatesAndFiltersVerified(
 		expectedIDs = append(expectedIDs, artifactID)
 	}
 
-	// This record must not appear in the listing because it is not verified.
+	// This record must not appear because it has not been verified.
 	insertArtifactListTestArtifact(
 		t,
 		fixture,
