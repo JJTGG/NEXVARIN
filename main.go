@@ -331,6 +331,16 @@ func newHTTPHandler(
 		),
 	)
 
+	// Expose verified artifact discovery through the authenticated control API.
+	mux.Handle(
+		"GET /v1/projects/{projectId}/repositories/{repositoryId}/artifacts",
+		listRepositoryArtifactsHandler(
+			pool,
+			operationAuthenticator,
+			newPostgresArtifactListAuthorizer(pool),
+		),
+	)
+
 	mux.Handle(
 		"GET /v1/operations/{operationId}",
 		getOperationHandler(
