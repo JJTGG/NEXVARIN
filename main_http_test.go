@@ -198,6 +198,77 @@ func TestNewHTTPHandlerOperationRouteFailsClosedWhenUnconfigured(
 	}
 }
 
+func TestNewHTTPHandlerRegistersOperationListRoute(t *testing.T) {
+	handler := newHTTPHandler(
+		&pgxpool.Pool{},
+		mainHTTPTestAuthenticator{},
+		mainHTTPTestAuthorizer{},
+	)
+
+	response := serveMainHTTPTestRequest(
+		handler,
+		http.MethodGet,
+		mainHTTPTestOperationPath,
+		nil,
+	)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"HTTP status = %d, want %d; body: %s",
+			response.Code,
+			http.StatusUnauthorized,
+			response.Body.String(),
+		)
+	}
+
+	if got := response.Header().Get("WWW-Authenticate"); got == "" {
+		t.Error("WWW-Authenticate header is missing")
+	}
+
+	var problem operationProblemResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode operation list problem response: %v", err)
+	}
+
+	if problem.Code != "unauthorized" {
+		t.Errorf("problem code = %q, want unauthorized", problem.Code)
+	}
+}
+
+func TestNewHTTPHandlerOperationListRouteFailsClosedWhenUnconfigured(
+	t *testing.T,
+) {
+	handler := newHTTPHandler(nil, nil, nil)
+
+	response := serveMainHTTPTestRequest(
+		handler,
+		http.MethodGet,
+		mainHTTPTestOperationPath,
+		nil,
+	)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf(
+			"HTTP status = %d, want %d; body: %s",
+			response.Code,
+			http.StatusServiceUnavailable,
+			response.Body.String(),
+		)
+	}
+
+	var problem operationProblemResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+		t.Fatalf("decode operation list problem response: %v", err)
+	}
+
+	if problem.Code != "operation_list_not_configured" {
+		t.Errorf(
+			"problem code = %q, want operation_list_not_configured",
+			problem.Code,
+		)
+	}
+}
+
 func TestNewHTTPHandlerRegistersOperationReadRoute(t *testing.T) {
 	handler := newHTTPHandler(
 		&pgxpool.Pool{},
@@ -274,7 +345,7 @@ func TestNewHTTPHandlerRejectsUnsupportedOperationMethod(t *testing.T) {
 
 	response := serveMainHTTPTestRequest(
 		handler,
-		http.MethodGet,
+		http.MethodPut,
 		mainHTTPTestOperationPath,
 		nil,
 	)
@@ -288,8 +359,9 @@ func TestNewHTTPHandlerRejectsUnsupportedOperationMethod(t *testing.T) {
 		)
 	}
 
-	if got := response.Header().Get("Allow"); got != http.MethodPost {
-		t.Errorf("Allow header = %q, want POST", got)
+	const wantAllow = http.MethodGet + ", HEAD, " + http.MethodPost
+	if got := response.Header().Get("Allow"); got != wantAllow {
+		t.Errorf("Allow header = %q, want %q", got, wantAllow)
 	}
 }
 
