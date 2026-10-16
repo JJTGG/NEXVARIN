@@ -66,6 +66,7 @@ type operationWorkerOCIDescriptor struct {
 
 type operationWorkerBuildArtifactMetadata struct {
 	Format             string `json:"format"`
+	ImageReference     string `json:"imageReference"`
 	ContentDigestScope string `json:"contentDigestScope"`
 	ArchiveDigest      string `json:"archiveDigest"`
 	OCIIndexDigest     string `json:"ociIndexDigest"`
@@ -151,6 +152,16 @@ func (executor operationWorkerBuildExecutor) Execute(
 	timeout := executor.BuildTimeout
 	if timeout <= 0 {
 		timeout = operationWorkerBuildTimeout
+	}
+
+	imageReference, err := operationWorkerBuildImageReference(
+		task.Claimed.Operation.ID,
+	)
+	if err != nil {
+		return failedBuildResult(
+			"invalid_build_operation_id",
+			"The build operation identifier is invalid.",
+		)
 	}
 
 	source, err := loadOperationWorkerSource(
@@ -256,13 +267,14 @@ func (executor operationWorkerBuildExecutor) Execute(
 		}
 	}()
 
-	if err := runOperationWorkerBuildKit(
+	if err := runOperationWorkerBuildKitNamed(
 		ctx,
 		resolvedBuildctl,
 		buildkitAddress,
 		checkout.Directory(),
 		stagingPath,
 		timeout,
+		imageReference,
 	); err != nil {
 		if errors.Is(err, errOperationWorkerBuildOutcomeUncertain) {
 			return reconciliationBuildResult(
@@ -309,6 +321,7 @@ func (executor operationWorkerBuildExecutor) Execute(
 
 	metadata, err := json.Marshal(operationWorkerBuildArtifactMetadata{
 		Format:             "oci-archive-tar",
+		ImageReference:     imageReference,
 		ContentDigestScope: "complete-archive-file",
 		ArchiveDigest:      archiveMetadata.ArchiveDigest,
 		OCIIndexDigest:     archiveMetadata.IndexDigest,
@@ -456,12 +469,51 @@ func runOperationWorkerBuildKit(
 	outputPath string,
 	timeout time.Duration,
 ) error {
+	return runOperationWorkerBuildKitNamed(
+		ctx,
+		buildctlPath,
+		address,
+		sourceDirectory,
+		outputPath,
+		timeout,
+		"",
+	)
+}
+
+func runOperationWorkerBuildKitNamed(
+	ctx context.Context,
+	buildctlPath string,
+	address string,
+	sourceDirectory string,
+	outputPath string,
+	timeout time.Duration,
+	imageReference string,
+) error {
 	if ctx == nil {
 		return errors.New("BuildKit context is required")
 	}
 
 	if strings.Contains(outputPath, ",") {
 		return errors.New("artifact output path cannot contain commas")
+	}
+
+	if imageReference != "" {
+		prefix := "localhost/nexvarin/build-"
+		suffix := ":latest"
+		operationID := strings.TrimPrefix(imageReference, prefix)
+		operationID = strings.TrimSuffix(operationID, suffix)
+
+		expectedReference, err := operationWorkerBuildImageReference(
+			operationID,
+		)
+		if err != nil || expectedReference != imageReference {
+			return errors.New("BuildKit image reference is invalid")
+		}
+	}
+
+	outputSpec := "type=oci,dest=" + outputPath
+	if imageReference != "" {
+		outputSpec += ",name=" + imageReference
 	}
 
 	homeDirectory, err := os.MkdirTemp("", "nexvarin-build-home-")
@@ -492,7 +544,7 @@ func runOperationWorkerBuildKit(
 		"--opt",
 		"filename=Dockerfile",
 		"--output",
-		"type=oci,dest="+outputPath,
+		outputSpec,
 	)
 
 	command.Env = []string{
@@ -518,6 +570,17 @@ func runOperationWorkerBuildKit(
 	}
 
 	return nil
+}
+
+func operationWorkerBuildImageReference(
+	operationID string,
+) (string, error) {
+	normalizedID, err := normalizeOperationUUID(operationID)
+	if err != nil {
+		return "", fmt.Errorf("operation ID: %w", err)
+	}
+
+	return "localhost/nexvarin/build-" + normalizedID + ":latest", nil
 }
 
 func inspectOperationWorkerOCIArchive(
