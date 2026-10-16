@@ -244,9 +244,9 @@ func TestListRepositoryOperationsHandlerValidatesQueryParameters(
 	)
 
 	tests := []struct {
-		name      string
-		query     string
-		wantCode  string
+		name     string
+		query    string
+		wantCode string
 	}{
 		{
 			name:     "zero limit",
