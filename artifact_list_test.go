@@ -83,7 +83,7 @@ func insertArtifactListTestArtifact(
 					WHEN $7 = 'verified' THEN now()
 					ELSE NULL
 				END,
-				jsonb_build_object('imageReference', $8),
+				jsonb_build_object('imageReference', $8::text),
 				$9
 			)
 			RETURNING id::text
