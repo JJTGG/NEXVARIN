@@ -87,8 +87,8 @@ func prepareOperationWorkerDeployExecutorTestArtifact(
 		ArchiveDigest:      archiveMetadata.ArchiveDigest,
 		OCIIndexDigest:     archiveMetadata.IndexDigest,
 		SourceProvider:     "generic_git",
-		SourceRevision:    artifact.SourceRevision,
-		BuildOperationID:  artifact.BuildOperationID,
+		SourceRevision:     artifact.SourceRevision,
+		BuildOperationID:   artifact.BuildOperationID,
 	}
 
 	metadataJSON, err := json.Marshal(artifact.Metadata)
@@ -385,8 +385,8 @@ func TestOperationWorkerDeployExecutorIntegrationRetriesKnownRuntimeFailure(
 	}
 
 	var (
-		deploymentCount int
-		observedState   string
+		deploymentCount  int
+		observedState    string
 		runtimeReference string
 	)
 
