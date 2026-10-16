@@ -15,10 +15,10 @@ info:
     environment. They are not the final multi-user authentication system.
     Do not expose this API to untrusted networks.
 
-    Operation creation, listing, and inspection are implemented,
-    registered, and covered by tests. Operation cancellation remains
-    planned and must not be considered available until its handler is
-    implemented, registered, and tested.
+    Operation creation, operation listing and inspection, and verified
+    artifact listing are implemented, registered, and covered by tests.
+    Operation cancellation remains planned and must not be considered
+    available until its handler is implemented, registered, and tested.
 
     Project and repository registration are handled through controlled
     bootstrap during the initial slice.
@@ -30,6 +30,7 @@ servers:
 tags:
   - name: Health
   - name: Operations
+  - name: Artifacts
 
 paths:
   /health/live:
@@ -215,6 +216,63 @@ paths:
           $ref: "#/components/responses/InvalidRequest"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+
+  /v1/projects/{projectId}/repositories/{repositoryId}/artifacts:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - $ref: "#/components/parameters/RepositoryId"
+
+    get:
+      tags: [Artifacts]
+      operationId: listRepositoryArtifacts
+      summary: List verified artifacts for a registered repository
+      description: |
+        Returns only verified artifacts in reverse creation order.
+        The cursor is opaque to clients and should be passed back unchanged
+        to retrieve the next page.
+
+        The caller must own the project containing the repository. A
+        project or repository that is missing or outside the caller's
+        authorized scope is reported as not found.
+
+        Artifact identifiers can be used to request deployment, but listing
+        an artifact does not deploy it or guarantee that it can run.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque pagination cursor returned by the API.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 1024
+      responses:
+        "200":
+          description: Verified artifacts returned in reverse creation order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/InvalidRequest"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -569,6 +627,67 @@ components:
         nextCursor:
           type: [string, "null"]
           description: Opaque cursor for the next page.
+
+    ArtifactList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Artifact"
+        nextCursor:
+          type: [string, "null"]
+          description: Opaque cursor for the next page.
+
+    Artifact:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - projectId
+        - repositoryId
+        - buildOperationId
+        - sourceRevision
+        - artifactKind
+        - contentDigest
+        - verificationStatus
+        - verifiedAt
+        - createdAt
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        repositoryId:
+          type: string
+          format: uuid
+        buildOperationId:
+          type: string
+          format: uuid
+        sourceRevision:
+          $ref: "#/components/schemas/GitRevision"
+        artifactKind:
+          type: string
+          const: oci_image
+        contentDigest:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+        verificationStatus:
+          type: string
+          const: verified
+        verifiedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        imageReference:
+          type: string
+          description: Deterministic image reference assigned to this build when available.
 
     Problem:
       type: object
