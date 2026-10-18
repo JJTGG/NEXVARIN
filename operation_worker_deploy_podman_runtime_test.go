@@ -12,17 +12,13 @@ import (
 )
 
 const (
-	operationWorkerDeployPodmanTestOperationID =
-		"123e4567-e89b-12d3-a456-426614174010"
+	operationWorkerDeployPodmanTestOperationID = "123e4567-e89b-12d3-a456-426614174010"
 
-	operationWorkerDeployPodmanTestDeploymentID =
-		"123e4567-e89b-12d3-a456-426614174011"
+	operationWorkerDeployPodmanTestDeploymentID = "123e4567-e89b-12d3-a456-426614174011"
 
-	operationWorkerDeployPodmanTestBuildOperationID =
-		"123e4567-e89b-12d3-a456-426614174012"
+	operationWorkerDeployPodmanTestBuildOperationID = "123e4567-e89b-12d3-a456-426614174012"
 
-	operationWorkerDeployPodmanTestContainerID =
-		"test-container-instance-001"
+	operationWorkerDeployPodmanTestContainerID = "test-container-instance-001"
 )
 
 func newOperationWorkerDeployPodmanTestRequest(
@@ -66,7 +62,7 @@ func newOperationWorkerDeployPodmanTestContainer(
 	}
 
 	container.Config.Labels = map[string]string{
-		operationWorkerDeployPodmanOperationLabel:   request.OperationID,
+		operationWorkerDeployPodmanOperationLabel:  request.OperationID,
 		operationWorkerDeployPodmanDeploymentLabel: request.DeploymentID,
 		operationWorkerDeployPodmanDigestLabel:     request.ArtifactDigest,
 		operationWorkerDeployPodmanImageLabel:      request.ImageReference,
