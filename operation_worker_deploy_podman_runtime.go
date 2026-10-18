@@ -19,7 +19,7 @@ const (
 
 	operationWorkerDeployPodmanOperationLabel  = "io.nexvarin.operation-id"
 	operationWorkerDeployPodmanDeploymentLabel = "io.nexvarin.deployment-id"
-	operationWorkerDeployPodmanDigestLabel    = "io.nexvarin.artifact-digest"
+	operationWorkerDeployPodmanDigestLabel     = "io.nexvarin.artifact-digest"
 	operationWorkerDeployPodmanImageLabel      = "io.nexvarin.image-reference"
 
 	operationWorkerDeployPodmanNamePrefix = "nexvarin-deploy-"
