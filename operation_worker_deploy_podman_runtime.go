@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -17,7 +18,7 @@ const (
 	operationWorkerDeployPodmanCommandTimeout = 2 * time.Minute
 	operationWorkerDeployPodmanOutputLimit    = 4 << 20
 
-	operationWorkerDeployPodmanOperationLabel   = "io.nexvarin.operation-id"
+	operationWorkerDeployPodmanOperationLabel  = "io.nexvarin.operation-id"
 	operationWorkerDeployPodmanDeploymentLabel = "io.nexvarin.deployment-id"
 	operationWorkerDeployPodmanDigestLabel     = "io.nexvarin.artifact-digest"
 	operationWorkerDeployPodmanImageLabel      = "io.nexvarin.image-reference"
@@ -300,8 +301,6 @@ func validOperationWorkerDeployPodmanImageReference(
 		return false
 	}
 
-	// Keep the slice expression on one line to avoid Go's automatic
-	// semicolon insertion after the opening bracket.
 	buildOperationID := value[len(prefix) : len(value)-len(suffix)]
 
 	normalizedID, err := normalizeOperationUUID(buildOperationID)
