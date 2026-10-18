@@ -19,7 +19,7 @@ const (
 
 	operationWorkerDeployPodmanOperationLabel  = "io.nexvarin.operation-id"
 	operationWorkerDeployPodmanDeploymentLabel = "io.nexvarin.deployment-id"
-	operationWorkerDeployPodmanDigestLabel     = "io.nexvarin.artifact-digest"
+	operationWorkerDeployPodmanDigestLabel    = "io.nexvarin.artifact-digest"
 	operationWorkerDeployPodmanImageLabel      = "io.nexvarin.image-reference"
 
 	operationWorkerDeployPodmanNamePrefix = "nexvarin-deploy-"
@@ -66,6 +66,12 @@ func (runtime operationWorkerDeployPodmanRuntime) Deploy(
 
 	if ctx.Err() != nil {
 		return operationWorkerDeployRuntimeResult{}, ctx.Err()
+	}
+
+	// Verify the actual Podman host is rootless before inspecting or
+	// changing any deployment container.
+	if err := runtime.verifyRootless(ctx); err != nil {
+		return operationWorkerDeployRuntimeResult{}, err
 	}
 
 	containerName := operationWorkerDeployPodmanContainerName(
@@ -262,6 +268,33 @@ func (runtime operationWorkerDeployPodmanRuntime) validateRequest(
 		request.ImageReference,
 	) {
 		return errors.New("deployment image reference is invalid")
+	}
+
+	return nil
+}
+
+// verifyRootless requires Podman to explicitly report that its host is
+// running rootless. Unknown output, a rootful host, or a failed info command
+// all block deployment before any container operation is attempted.
+func (runtime operationWorkerDeployPodmanRuntime) verifyRootless(
+	ctx context.Context,
+) error {
+	output, exitCode, err := runtime.runPodman(
+		ctx,
+		"info",
+		"--format",
+		"{{.Host.Security.Rootless}}",
+	)
+	if err != nil || exitCode != 0 {
+		return errors.New(
+			"Podman rootless mode could not be verified",
+		)
+	}
+
+	if strings.TrimSpace(string(output)) != "true" {
+		return errors.New(
+			"Podman must be running in rootless mode",
+		)
 	}
 
 	return nil
