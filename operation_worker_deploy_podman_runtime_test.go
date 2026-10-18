@@ -117,6 +117,13 @@ set -eu
 printf '%s\n' "$*" >> "$FAKE_PODMAN_LOG"
 
 case "${1-}" in
+  info)
+    if [ "${FAKE_PODMAN_INFO_EXIT:-0}" != "0" ]; then
+      exit "${FAKE_PODMAN_INFO_EXIT:-0}"
+    fi
+    printf '%s\n' "${FAKE_PODMAN_ROOTLESS_OUTPUT:-true}"
+    exit 0
+    ;;
   container)
     case "${2-}" in
       exists)
@@ -174,6 +181,8 @@ exit 125
 	t.Setenv("FAKE_PODMAN_CREATE_STATE", "1")
 	t.Setenv("FAKE_PODMAN_RUN_EXIT", "0")
 	t.Setenv("FAKE_PODMAN_START_EXIT", "0")
+	t.Setenv("FAKE_PODMAN_INFO_EXIT", "0")
+	t.Setenv("FAKE_PODMAN_ROOTLESS_OUTPUT", "true")
 
 	runtime := operationWorkerDeployPodmanRuntime{
 		PodmanPath:     podmanPath,
@@ -248,6 +257,20 @@ func TestOperationWorkerDeployPodmanRuntimeDeployCreatesIsolatedContainer(
 
 	if countOperationWorkerDeployPodmanTestCommands(
 		log,
+		"info ",
+	) != 1 {
+		t.Error("expected exactly one rootless-mode verification command")
+	}
+
+	if !strings.Contains(
+		log,
+		"info --format {{.Host.Security.Rootless}}",
+	) {
+		t.Error("Podman rootless-mode verification used unexpected arguments")
+	}
+
+	if countOperationWorkerDeployPodmanTestCommands(
+		log,
 		"load ",
 	) != 1 {
 		t.Error("expected exactly one image-load command")
@@ -290,6 +313,80 @@ func TestOperationWorkerDeployPodmanRuntimeDeployCreatesIsolatedContainer(
 	if strings.Contains(log, "--publish ") ||
 		strings.Contains(log, " -p ") {
 		t.Error("initial deployment must not publish container ports")
+	}
+}
+
+func TestOperationWorkerDeployPodmanRuntimeRequiresVerifiedRootlessMode(
+	t *testing.T,
+) {
+	tests := []struct {
+		name         string
+		rootlessMode string
+		infoExitCode string
+	}{
+		{
+			name:         "rootful Podman",
+			rootlessMode: "false",
+			infoExitCode: "0",
+		},
+		{
+			name:         "unrecognized rootless-mode output",
+			rootlessMode: "unknown",
+			infoExitCode: "0",
+		},
+		{
+			name:         "Podman info command fails",
+			rootlessMode: "true",
+			infoExitCode: "125",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := newOperationWorkerDeployPodmanTestRequest(t)
+
+			runtime, _, logPath :=
+				newOperationWorkerDeployPodmanTestRuntime(
+					t,
+					request,
+					false,
+				)
+
+			t.Setenv(
+				"FAKE_PODMAN_ROOTLESS_OUTPUT",
+				test.rootlessMode,
+			)
+			t.Setenv(
+				"FAKE_PODMAN_INFO_EXIT",
+				test.infoExitCode,
+			)
+
+			_, err := runtime.Deploy(
+				context.Background(),
+				request,
+			)
+			if err == nil {
+				t.Fatal("expected deployment to be blocked without verified rootless mode")
+			}
+
+			log := readOperationWorkerDeployPodmanTestLog(
+				t,
+				logPath,
+			)
+
+			commands := strings.Split(
+				strings.TrimSpace(log),
+				"\n",
+			)
+
+			if len(commands) != 1 ||
+				commands[0] != "info --format {{.Host.Security.Rootless}}" {
+				t.Fatalf(
+					"Podman commands = %q; expected only the rootless-mode check",
+					log,
+				)
+			}
+		})
 	}
 }
 
