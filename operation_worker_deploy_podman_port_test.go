@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -129,6 +131,97 @@ func TestOperationWorkerDeployPodmanRuntimeRejectsInvalidApplicationPort(
 				t.Fatalf("Deploy() with port %d succeeded, want error", port)
 			}
 		})
+	}
+}
+
+func TestOperationWorkerDeployPodmanRuntimeRejectsUnsafePortBindings(
+	t *testing.T,
+) {
+	tests := []struct {
+		name       string
+		portOutput string
+	}{
+		{
+			name:       "non-loopback address",
+			portOutput: "8080/tcp -> 0.0.0.0:12345",
+		},
+		{
+			name: "ambiguous mappings",
+			portOutput: "8080/tcp -> 127.0.0.1:12345\n" +
+				"8080/tcp -> 127.0.0.1:12346",
+		},
+		{
+			name:       "malformed mapping",
+			portOutput: "not-a-valid-binding",
+		},
+		{
+			name:       "missing mapping",
+			portOutput: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := newOperationWorkerDeployPodmanTestRequest(t)
+			request.ApplicationPort = 8080
+
+			runtime, logPath := newOperationWorkerDeployPodmanPortTestRuntime(
+				t,
+				request,
+				test.portOutput,
+			)
+
+			_, err := runtime.Deploy(context.Background(), request)
+			if !errors.Is(err, errOperationWorkerDeployRuntimeOutcomeUnknown) {
+				t.Fatalf(
+					"Deploy() error = %v, want unknown runtime outcome",
+					err,
+				)
+			}
+
+			log := readOperationWorkerDeployPodmanTestLog(t, logPath)
+			if countOperationWorkerDeployPodmanTestCommands(log, "run ") != 1 {
+				t.Fatal("failed port verification must not create a duplicate container")
+			}
+		})
+	}
+}
+
+func TestOperationWorkerDeployPodmanRuntimeRejectsUnhealthyHTTP(
+	t *testing.T,
+) {
+	var requestCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			requestCount.Add(1)
+			http.Error(w, "application is not ready", http.StatusServiceUnavailable)
+		},
+	))
+	defer server.Close()
+
+	_, hostPort, err := net.SplitHostPort(
+		strings.TrimPrefix(server.URL, "http://"),
+	)
+	if err != nil {
+		t.Fatalf("parse test server address: %v", err)
+	}
+
+	runtime := operationWorkerDeployPodmanRuntime{}
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		1500*time.Millisecond,
+	)
+	defer cancel()
+
+	err = runtime.waitForApplicationHTTP(ctx, hostPort)
+	if err == nil {
+		t.Fatal("HTTP readiness succeeded for an unhealthy application")
+	}
+
+	if requestCount.Load() == 0 {
+		t.Fatal("readiness test did not issue an HTTP request")
 	}
 }
 
