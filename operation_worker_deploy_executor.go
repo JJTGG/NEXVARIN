@@ -182,6 +182,7 @@ func (executor operationWorkerDeployExecutor) Execute(
 			ArtifactPath:   artifactPath,
 			ArtifactDigest: artifact.ContentDigest,
 			ImageReference: artifact.Metadata.ImageReference,
+			ApplicationPort: task.Request.ApplicationPort,
 		},
 	)
 	if err != nil {
