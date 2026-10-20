@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -17,10 +18,11 @@ const (
 	operationWorkerDeployPodmanCommandTimeout = 2 * time.Minute
 	operationWorkerDeployPodmanOutputLimit    = 4 << 20
 
-	operationWorkerDeployPodmanOperationLabel  = "io.nexvarin.operation-id"
-	operationWorkerDeployPodmanDeploymentLabel = "io.nexvarin.deployment-id"
-	operationWorkerDeployPodmanDigestLabel     = "io.nexvarin.artifact-digest"
-	operationWorkerDeployPodmanImageLabel      = "io.nexvarin.image-reference"
+	operationWorkerDeployPodmanOperationLabel          = "io.nexvarin.operation-id"
+	operationWorkerDeployPodmanDeploymentLabel         = "io.nexvarin.deployment-id"
+	operationWorkerDeployPodmanDigestLabel             = "io.nexvarin.artifact-digest"
+	operationWorkerDeployPodmanImageLabel              = "io.nexvarin.image-reference"
+	operationWorkerDeployPodmanApplicationPortLabel    = "io.nexvarin.application-port"
 
 	operationWorkerDeployPodmanNamePrefix = "nexvarin-deploy-"
 )
@@ -32,8 +34,12 @@ var errOperationWorkerDeployPodmanCommandInterrupted = errors.New(
 // operationWorkerDeployPodmanRuntime runs verified OCI artifacts through
 // a local rootless Podman installation.
 //
-// This initial adapter creates an isolated container. It does not publish
-// ports, perform application health checks, or activate preview routing.
+// Deployments with a validated application port publish that container port
+// on a dynamically assigned host port bound to 127.0.0.1. A zero application
+// port retains the isolated, non-publishing mode for internal adapter tests;
+// API-created deploy requests cannot use that mode.
+// This adapter does not yet perform application health checks or activate
+// preview routing.
 type operationWorkerDeployPodmanRuntime struct {
 	PodmanPath     string
 	CommandTimeout time.Duration
@@ -137,7 +143,25 @@ func (runtime operationWorkerDeployPodmanRuntime) Deploy(
 		operationWorkerDeployPodmanImageLabel + "=" + request.ImageReference,
 
 		"--pull=never",
-		"--network=none",
+	}
+
+	if request.ApplicationPort == 0 {
+		arguments = append(arguments, "--network=none")
+	} else {
+		arguments = append(
+			arguments,
+			"--network=slirp4netns",
+			"--publish",
+			fmt.Sprintf("127.0.0.1::%d/tcp", request.ApplicationPort),
+			"--label",
+			operationWorkerDeployPodmanApplicationPortLabel+"="+strconv.Itoa(
+				request.ApplicationPort,
+			),
+		)
+	}
+
+	arguments = append(
+		arguments,
 		"--cap-drop=ALL",
 		"--security-opt=no-new-privileges",
 		"--pids-limit=256",
@@ -145,9 +169,8 @@ func (runtime operationWorkerDeployPodmanRuntime) Deploy(
 		"--cpus=1",
 		"--tmpfs",
 		"/tmp:rw,noexec,nosuid,nodev,size=64m",
-
 		request.ImageReference,
-	}
+	)
 
 	_, exitCode, err = runtime.runPodman(ctx, arguments...)
 	if err != nil {
@@ -268,6 +291,13 @@ func (runtime operationWorkerDeployPodmanRuntime) validateRequest(
 		request.ImageReference,
 	) {
 		return errors.New("deployment image reference is invalid")
+	}
+
+	if request.ApplicationPort < 0 ||
+		request.ApplicationPort > maxOperationApplicationPort {
+		return errors.New(
+			"deployment application port must be zero for isolated mode or between 1 and 65535",
+		)
 	}
 
 	return nil
@@ -422,6 +452,10 @@ func (runtime operationWorkerDeployPodmanRuntime) containerMatches(
 	}
 
 	labels := container.Config.Labels
+	expectedApplicationPort := ""
+	if request.ApplicationPort > 0 {
+		expectedApplicationPort = strconv.Itoa(request.ApplicationPort)
+	}
 
 	return labels[operationWorkerDeployPodmanOperationLabel] ==
 		request.OperationID &&
@@ -430,7 +464,9 @@ func (runtime operationWorkerDeployPodmanRuntime) containerMatches(
 		labels[operationWorkerDeployPodmanDigestLabel] ==
 			request.ArtifactDigest &&
 		labels[operationWorkerDeployPodmanImageLabel] ==
-			request.ImageReference
+			request.ImageReference &&
+		labels[operationWorkerDeployPodmanApplicationPortLabel] ==
+			expectedApplicationPort
 }
 
 func (runtime operationWorkerDeployPodmanRuntime) startAndConfirm(
