@@ -20,6 +20,11 @@ const (
 	operationTypeReconcile operationType = "reconcile"
 )
 
+const (
+	minOperationApplicationPort = 1
+	maxOperationApplicationPort = 65535
+)
+
 // normalizedOperationRequest contains only the fields that belong to
 // the selected operation type.
 //
@@ -29,8 +34,14 @@ type normalizedOperationRequest struct {
 	OperationType     operationType `json:"operationType"`
 	SourceRevision    string        `json:"sourceRevision,omitempty"`
 	ArtifactID        string        `json:"artifactId,omitempty"`
+	ApplicationPort   int           `json:"applicationPort,omitempty"`
 	DeploymentID      string        `json:"deploymentId,omitempty"`
 	ParentOperationID string        `json:"parentOperationId,omitempty"`
+}
+
+func validOperationApplicationPort(port int) bool {
+	return port >= minOperationApplicationPort &&
+		port <= maxOperationApplicationPort
 }
 
 // normalizeOperationRequest validates a supported operation request,
@@ -96,8 +107,9 @@ func normalizeOperationRequest(
 
 	case operationTypeDeploy:
 		var request struct {
-			OperationType operationType `json:"operationType"`
-			ArtifactID    string        `json:"artifactId"`
+			OperationType   operationType `json:"operationType"`
+			ArtifactID      string        `json:"artifactId"`
+			ApplicationPort int           `json:"applicationPort"`
 		}
 
 		if err := decodeStrictOperationJSON(raw, &request); err != nil {
@@ -113,9 +125,16 @@ func normalizeOperationRequest(
 			return empty, nil, "", fmt.Errorf("artifactId: %w", err)
 		}
 
+		if !validOperationApplicationPort(request.ApplicationPort) {
+			return empty, nil, "", errors.New(
+				"applicationPort must be an integer between 1 and 65535",
+			)
+		}
+
 		normalized = normalizedOperationRequest{
-			OperationType: operationTypeDeploy,
-			ArtifactID:    artifactID,
+			OperationType:   operationTypeDeploy,
+			ArtifactID:      artifactID,
+			ApplicationPort: request.ApplicationPort,
 		}
 
 	case operationTypeCleanup:
