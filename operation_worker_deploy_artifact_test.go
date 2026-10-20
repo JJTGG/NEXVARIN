@@ -114,11 +114,13 @@ func createClaimedDeployTaskForArtifactTest(
 	t.Helper()
 
 	requestBody, err := json.Marshal(struct {
-		OperationType operationType `json:"operationType"`
-		ArtifactID    string        `json:"artifactId"`
+		OperationType   operationType `json:"operationType"`
+		ArtifactID      string        `json:"artifactId"`
+		ApplicationPort int           `json:"applicationPort"`
 	}{
-		OperationType: operationTypeDeploy,
-		ArtifactID:    artifactID,
+		OperationType:   operationTypeDeploy,
+		ArtifactID:      artifactID,
+		ApplicationPort: 8080,
 	})
 	if err != nil {
 		t.Fatalf("encode deployment request: %v", err)
