@@ -1,3 +1,4 @@
+
 name: NEXVARIN validation
 
 on:
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   validate:
-    name: Go and PostgreSQL validation
+    name: Go, PostgreSQL and Podman validation
     runs-on: ubuntu-latest
 
     services:
@@ -60,10 +61,21 @@ jobs:
             exit 1
           fi
 
-      - name: Install PostgreSQL client
+      - name: Install PostgreSQL client and Podman
         run: |
           sudo apt-get update
-          sudo apt-get install --yes postgresql-client
+          sudo apt-get install --yes postgresql-client podman
+
+      - name: Verify rootless Podman support
+        shell: bash
+        run: |
+          rootless="$(podman info --format '{{.Host.Security.Rootless}}')"
+          printf 'Podman rootless mode: %s\n' "$rootless"
+
+          if [ "$rootless" != "true" ]; then
+            echo "The CI runner does not provide verified rootless Podman."
+            exit 1
+          fi
 
       - name: Apply and verify control-plane migrations
         shell: bash
@@ -159,9 +171,11 @@ jobs:
       - name: Build
         run: go build ./...
 
-      - name: Run tests
+      - name: Run tests, including live rootless Podman integration
         env:
           TEST_DATABASE_URL: postgresql://nexvarin_test:nexvarin_test@127.0.0.1:5432/nexvarin_test?sslmode=disable
+          NEXVARIN_PODMAN_PATH: /usr/bin/podman
+          NEXVARIN_PODMAN_INTEGRATION: "1"
         run: go test -v ./...
 
       - name: Run static analysis
