@@ -4,9 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
@@ -15,33 +20,21 @@ func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
 	request := newOperationWorkerDeployPodmanTestRequest(t)
 	request.ApplicationPort = 8080
 
-	runtime, _, logPath := newOperationWorkerDeployPodmanTestRuntime(
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("nexvarin-ready\n"))
+		},
+	))
+	defer server.Close()
+
+	portOutput := strings.TrimPrefix(server.URL, "http://")
+
+	runtime, logPath := newOperationWorkerDeployPodmanPortTestRuntime(
 		t,
 		request,
-		false,
+		portOutput,
 	)
-
-	containerJSON := newOperationWorkerDeployPodmanTestContainer(
-		request,
-		true,
-	)
-
-	var containers []operationWorkerDeployPodmanContainer
-	if err := json.Unmarshal(containerJSON, &containers); err != nil {
-		t.Fatalf("decode fake container state: %v", err)
-	}
-	if len(containers) != 1 {
-		t.Fatalf("fake container count = %d, want 1", len(containers))
-	}
-
-	containers[0].Config.Labels[operationWorkerDeployPodmanApplicationPortLabel] =
-		strconv.Itoa(request.ApplicationPort)
-
-	containerJSON, err := json.Marshal(containers)
-	if err != nil {
-		t.Fatalf("encode fake container state: %v", err)
-	}
-	t.Setenv("FAKE_PODMAN_STATE_JSON", string(containerJSON))
 
 	first, err := runtime.Deploy(context.Background(), request)
 	if err != nil {
@@ -86,6 +79,7 @@ func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
 	if err != nil {
 		t.Fatalf("recover loopback deployment on retry: %v", err)
 	}
+
 	if second.RuntimeInstanceReference != first.RuntimeInstanceReference {
 		t.Fatalf(
 			"retry reference = %q, first reference = %q",
@@ -136,4 +130,112 @@ func TestOperationWorkerDeployPodmanRuntimeRejectsInvalidApplicationPort(
 			}
 		})
 	}
+}
+
+func newOperationWorkerDeployPodmanPortTestRuntime(
+	t *testing.T,
+	request operationWorkerDeployRuntimeRequest,
+	portOutput string,
+) (
+	operationWorkerDeployPodmanRuntime,
+	string,
+) {
+	t.Helper()
+
+	root := t.TempDir()
+	podmanPath := filepath.Join(root, "fake-podman")
+	statePath := filepath.Join(root, "container-state.json")
+	logPath := filepath.Join(root, "commands.log")
+
+	containerJSON := newOperationWorkerDeployPodmanTestContainer(
+		request,
+		true,
+	)
+
+	var containers []operationWorkerDeployPodmanContainer
+	if err := json.Unmarshal(containerJSON, &containers); err != nil {
+		t.Fatalf("decode fake container state: %v", err)
+	}
+
+	if len(containers) != 1 {
+		t.Fatalf("fake container count = %d, want 1", len(containers))
+	}
+
+	containers[0].Config.Labels[operationWorkerDeployPodmanApplicationPortLabel] =
+		strconv.Itoa(request.ApplicationPort)
+
+	containerJSON, err := json.Marshal(containers)
+	if err != nil {
+		t.Fatalf("encode fake container state: %v", err)
+	}
+
+	script := `#!/bin/sh
+set -eu
+
+printf '%s\n' "$*" >> "$FAKE_PODMAN_LOG"
+
+case "${1-}" in
+  info)
+    printf '%s\n' "true"
+    exit 0
+    ;;
+  container)
+    case "${2-}" in
+      exists)
+        if [ -f "$FAKE_PODMAN_STATE" ]; then
+          exit 0
+        fi
+        exit 1
+        ;;
+      inspect)
+        if [ -f "$FAKE_PODMAN_STATE" ]; then
+          cat "$FAKE_PODMAN_STATE"
+          exit 0
+        fi
+        exit 1
+        ;;
+    esac
+    ;;
+  load)
+    exit 0
+    ;;
+  run|start)
+    printf '%s' "$FAKE_PODMAN_STATE_JSON" > "$FAKE_PODMAN_STATE"
+    exit 0
+    ;;
+  port)
+    if [ "${3-}" != "$FAKE_PODMAN_APPLICATION_PORT_SPEC" ]; then
+      exit 125
+    fi
+    printf '%s\n' "$FAKE_PODMAN_PORT_OUTPUT"
+    exit 0
+    ;;
+esac
+
+exit 125
+`
+
+	if err := os.WriteFile(
+		podmanPath,
+		[]byte(script),
+		0o700,
+	); err != nil {
+		t.Fatalf("create fake Podman executable: %v", err)
+	}
+
+	t.Setenv("FAKE_PODMAN_STATE", statePath)
+	t.Setenv("FAKE_PODMAN_LOG", logPath)
+	t.Setenv("FAKE_PODMAN_STATE_JSON", string(containerJSON))
+	t.Setenv("FAKE_PODMAN_PORT_OUTPUT", portOutput)
+	t.Setenv(
+		"FAKE_PODMAN_APPLICATION_PORT_SPEC",
+		strconv.Itoa(request.ApplicationPort)+"/tcp",
+	)
+
+	runtime := operationWorkerDeployPodmanRuntime{
+		PodmanPath:     podmanPath,
+		CommandTimeout: 5 * time.Second,
+	}
+
+	return runtime, logPath
 }
