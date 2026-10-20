@@ -177,11 +177,11 @@ func (executor operationWorkerDeployExecutor) Execute(
 	runtimeResult, err := executor.Runtime.Deploy(
 		ctx,
 		operationWorkerDeployRuntimeRequest{
-			OperationID:    task.Claimed.Operation.ID,
-			DeploymentID:   deployment.ID,
-			ArtifactPath:   artifactPath,
-			ArtifactDigest: artifact.ContentDigest,
-			ImageReference: artifact.Metadata.ImageReference,
+			OperationID:     task.Claimed.Operation.ID,
+			DeploymentID:    deployment.ID,
+			ArtifactPath:    artifactPath,
+			ArtifactDigest:  artifact.ContentDigest,
+			ImageReference:  artifact.Metadata.ImageReference,
 			ApplicationPort: task.Request.ApplicationPort,
 		},
 	)
