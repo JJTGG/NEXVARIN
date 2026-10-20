@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,13 +80,14 @@ func TestOperationWorkerDeployPodmanRuntimeLiveRootlessIntegration(
 	}
 
 	root := t.TempDir()
-
 	dockerfilePath := filepath.Join(root, "Dockerfile")
 	artifactPath := filepath.Join(root, "artifact.oci.tar")
 
 	dockerfile := []byte(
 		"FROM " + operationWorkerDeployPodmanIntegrationBaseImage + "\n" +
-			"CMD [\"sleep\", \"300\"]\n",
+			"RUN apk add --no-cache busybox-extras && mkdir -p /srv && printf 'nexvarin-ready\\n' > /srv/index.html\n" +
+			"EXPOSE 8080/tcp\n" +
+			"CMD [\"/bin/busybox-extras\", \"httpd\", \"-f\", \"-p\", \"8080\", \"-h\", \"/srv\"]\n",
 	)
 
 	if err := os.WriteFile(
@@ -219,6 +223,7 @@ func TestOperationWorkerDeployPodmanRuntimeLiveRootlessIntegration(
 		ArtifactPath:   artifactPath,
 		ArtifactDigest: artifactDigest,
 		ImageReference: imageReference,
+		ApplicationPort: 8080,
 	}
 
 	firstResult, err := runtime.Deploy(ctx, request)
@@ -274,9 +279,157 @@ func TestOperationWorkerDeployPodmanRuntimeLiveRootlessIntegration(
 		)
 	}
 
+	// Verify the actual host binding created by the production adapter.
+	portOutput, err := runOperationWorkerDeployPodmanIntegrationCommand(
+		ctx,
+		podmanPath,
+		"port",
+		containerName,
+		"8080/tcp",
+	)
+	if err != nil {
+		t.Fatalf(
+			"inspect published application port: %v; output: %s",
+			err,
+			strings.TrimSpace(string(portOutput)),
+		)
+	}
+
+	bindings := make([]string, 0, 1)
+	for _, line := range strings.Split(string(portOutput), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		index := strings.LastIndex(line, "127.0.0.1:")
+		if index < 0 {
+			t.Fatalf(
+				"application port is not exclusively bound to loopback; unexpected Podman port output: %q",
+				line,
+			)
+		}
+
+		bindings = append(
+			bindings,
+			strings.TrimSpace(line[index:]),
+		)
+	}
+
+	if len(bindings) != 1 {
+		stateOutput, stateErr := runOperationWorkerDeployPodmanIntegrationCommand(
+			ctx,
+			podmanPath,
+			"container",
+			"inspect",
+			"--format",
+			"{{.State.Status}}",
+			containerName,
+		)
+
+		logsOutput, logsErr := runOperationWorkerDeployPodmanIntegrationCommand(
+			ctx,
+			podmanPath,
+			"logs",
+			containerName,
+		)
+
+		t.Fatalf(
+			"expected exactly one loopback application port binding; port_output=%q container_state=%q state_error=%v container_logs=%q logs_error=%v",
+			strings.TrimSpace(string(portOutput)),
+			strings.TrimSpace(string(stateOutput)),
+			stateErr,
+			strings.TrimSpace(string(logsOutput)),
+			logsErr,
+		)
+	}
+
+	binding := bindings[0]
+	host, hostPort, err := net.SplitHostPort(binding)
+	if err != nil {
+		t.Fatalf("parse Podman port binding %q: %v", binding, err)
+	}
+
+	if host != "127.0.0.1" {
+		t.Fatalf("published port host = %q, want 127.0.0.1", host)
+	}
+
+	portNumber, err := strconv.Atoi(hostPort)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		t.Fatalf("Podman returned an invalid host port: %q", hostPort)
+	}
+
+	// Verify the application responds through the dynamically assigned
+	// loopback host port, not merely that the container is running.
+	probeURL := "http://" + net.JoinHostPort(host, hostPort) + "/"
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+	}
+
+	probeDeadline := time.Now().Add(20 * time.Second)
+	lastResult := "the HTTP server did not become ready"
+	ready := false
+
+	for time.Now().Before(probeDeadline) {
+		httpRequest, err := http.NewRequestWithContext(
+			ctx,
+			http.MethodGet,
+			probeURL,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("create HTTP readiness request: %v", err)
+		}
+
+		response, requestErr := client.Do(httpRequest)
+		if requestErr == nil {
+			body, readErr := io.ReadAll(
+				io.LimitReader(response.Body, 1024),
+			)
+			closeErr := response.Body.Close()
+
+			if readErr == nil &&
+				closeErr == nil &&
+				response.StatusCode == http.StatusOK &&
+				strings.TrimSpace(string(body)) == "nexvarin-ready" {
+				ready = true
+				break
+			}
+
+			lastResult = fmt.Sprintf(
+				"status=%d body=%q read_error=%v close_error=%v",
+				response.StatusCode,
+				strings.TrimSpace(string(body)),
+				readErr,
+				closeErr,
+			)
+		} else {
+			lastResult = requestErr.Error()
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf(
+				"HTTP readiness probe context ended: %v; last result: %s",
+				ctx.Err(),
+				lastResult,
+			)
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+
+	if !ready {
+		t.Fatalf(
+			"HTTP readiness probe failed at %s: %s",
+			probeURL,
+			lastResult,
+		)
+	}
+
 	t.Logf(
-		"live rootless Podman deployment and retry recovery succeeded for container %s",
+		"live rootless Podman deployment, retry recovery, loopback binding, and HTTP readiness succeeded for container %s at %s",
 		firstResult.RuntimeInstanceReference,
+		probeURL,
 	)
 }
 
