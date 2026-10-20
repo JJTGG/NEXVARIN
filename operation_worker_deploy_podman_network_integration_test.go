@@ -72,9 +72,9 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 
 	dockerfile := []byte(
 		"FROM " + operationWorkerDeployPodmanIntegrationBaseImage + "\n" +
+			"RUN apk add --no-cache busybox-extras && mkdir -p /srv && printf 'nexvarin-ready\\n' > /srv/index.html\n" +
 			"EXPOSE 8080/tcp\n" +
-			"RUN mkdir -p /srv && printf 'nexvarin-ready\\n' > /srv/index.html\n" +
-			"CMD [\"busybox\", \"httpd\", \"-f\", \"-p\", \"8080\", \"-h\", \"/srv\"]\n",
+			"CMD [\"/bin/busybox-extras\", \"httpd\", \"-f\", \"-p\", \"8080\", \"-h\", \"/srv\"]\n",
 	)
 
 	if err := os.WriteFile(
@@ -95,7 +95,6 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 	containerName := "nexvarin-loopback-probe-" +
 		strconv.Itoa(os.Getpid())
 
-	// Always attempt cleanup, including if readiness fails.
 	defer func() {
 		cleanupContext, cancelCleanup := context.WithTimeout(
 			context.Background(),
@@ -153,8 +152,6 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		)
 	}
 
-	// Explicitly select a documented rootless networking mode that
-	// supports publishing container ports.
 	if output, err := runOperationWorkerDeployPodmanIntegrationCommand(
 		ctx,
 		podmanPath,
@@ -175,7 +172,7 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		imageReference,
 	); err != nil {
 		t.Fatalf(
-			"start HTTP probe container with rootless slirp4netns networking: %v; output: %s",
+			"start HTTP probe container with rootless networking: %v; output: %s",
 			err,
 			strings.TrimSpace(string(output)),
 		)
@@ -196,7 +193,6 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		)
 	}
 
-	// Require an explicit IPv4 loopback binding. Never accept a wildcard bind.
 	binding := ""
 	for _, line := range strings.Split(string(portOutput), "\n") {
 		index := strings.LastIndex(line, "127.0.0.1:")
