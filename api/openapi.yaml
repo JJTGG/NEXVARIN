@@ -507,7 +507,7 @@ components:
     DeployOperationRequest:
       type: object
       additionalProperties: false
-      required: [operationType, artifactId]
+      required: [operationType, artifactId, applicationPort]
       properties:
         operationType:
           type: string
@@ -516,6 +516,11 @@ components:
           type: string
           format: uuid
           description: Existing verified artifact belonging to this project and repository.
+        applicationPort:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Port on which the application listens inside its container.
 
     CleanupOperationRequest:
       type: object
