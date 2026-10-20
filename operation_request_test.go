@@ -40,13 +40,34 @@ func TestNormalizeOperationRequestValid(t *testing.T) {
 			wantCanonical: `{"operationType":"build","sourceRevision":"` + revision64 + `"}`,
 		},
 		{
-			name:    "deploy normalizes uppercase UUID",
-			request: `{"operationType":"deploy","artifactId":"` + upperArtifactID + `"}`,
+			name:    "deploy normalizes uppercase UUID and stores application port",
+			request: `{"operationType":"deploy","artifactId":"` + upperArtifactID + `","applicationPort":8080}`,
 			want: normalizedOperationRequest{
-				OperationType: operationTypeDeploy,
-				ArtifactID:    artifactID,
+				OperationType:   operationTypeDeploy,
+				ArtifactID:      artifactID,
+				ApplicationPort: 8080,
 			},
-			wantCanonical: `{"operationType":"deploy","artifactId":"` + artifactID + `"}`,
+			wantCanonical: `{"operationType":"deploy","artifactId":"` + artifactID + `","applicationPort":8080}`,
+		},
+		{
+			name:    "deploy accepts lowest valid application port",
+			request: `{"operationType":"deploy","artifactId":"` + artifactID + `","applicationPort":1}`,
+			want: normalizedOperationRequest{
+				OperationType:   operationTypeDeploy,
+				ArtifactID:      artifactID,
+				ApplicationPort: 1,
+			},
+			wantCanonical: `{"operationType":"deploy","artifactId":"` + artifactID + `","applicationPort":1}`,
+		},
+		{
+			name:    "deploy accepts highest valid application port",
+			request: `{"operationType":"deploy","artifactId":"` + artifactID + `","applicationPort":65535}`,
+			want: normalizedOperationRequest{
+				OperationType:   operationTypeDeploy,
+				ArtifactID:      artifactID,
+				ApplicationPort: 65535,
+			},
+			wantCanonical: `{"operationType":"deploy","artifactId":"` + artifactID + `","applicationPort":65535}`,
 		},
 		{
 			name:    "cleanup",
@@ -70,24 +91,46 @@ func TestNormalizeOperationRequestValid(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, canonical, fingerprint, err := normalizeOperationRequest([]byte(test.request))
+			got, canonical, fingerprint, err := normalizeOperationRequest(
+				[]byte(test.request),
+			)
 			if err != nil {
 				t.Fatalf("normalizeOperationRequest() error = %v", err)
 			}
+
 			if got != test.want {
-				t.Errorf("normalized request = %#v, want %#v", got, test.want)
+				t.Errorf(
+					"normalized request = %#v, want %#v",
+					got,
+					test.want,
+				)
 			}
+
 			if string(canonical) != test.wantCanonical {
-				t.Errorf("canonical JSON = %s, want %s", canonical, test.wantCanonical)
+				t.Errorf(
+					"canonical JSON = %s, want %s",
+					canonical,
+					test.wantCanonical,
+				)
 			}
 
 			digest := sha256.Sum256(canonical)
 			wantFingerprint := hex.EncodeToString(digest[:])
+
 			if fingerprint != wantFingerprint {
-				t.Errorf("fingerprint = %q, want SHA-256 %q", fingerprint, wantFingerprint)
+				t.Errorf(
+					"fingerprint = %q, want SHA-256 %q",
+					fingerprint,
+					wantFingerprint,
+				)
 			}
+
 			if len(fingerprint) != sha256.Size*2 {
-				t.Errorf("fingerprint length = %d, want %d hexadecimal characters", len(fingerprint), sha256.Size*2)
+				t.Errorf(
+					"fingerprint length = %d, want %d hexadecimal characters",
+					len(fingerprint),
+					sha256.Size*2,
+				)
 			}
 		})
 	}
@@ -98,20 +141,34 @@ func TestNormalizeOperationRequestFingerprintIsStable(t *testing.T) {
 	first := `{"operationType":"build","sourceRevision":"` + revision + `"}`
 	second := "{\n  \"sourceRevision\": \"" + revision + "\",\n  \"operationType\": \"build\"\n}"
 
-	_, firstCanonical, firstFingerprint, err := normalizeOperationRequest([]byte(first))
+	_, firstCanonical, firstFingerprint, err := normalizeOperationRequest(
+		[]byte(first),
+	)
 	if err != nil {
 		t.Fatalf("normalize first request: %v", err)
 	}
-	_, secondCanonical, secondFingerprint, err := normalizeOperationRequest([]byte(second))
+
+	_, secondCanonical, secondFingerprint, err := normalizeOperationRequest(
+		[]byte(second),
+	)
 	if err != nil {
 		t.Fatalf("normalize second request: %v", err)
 	}
 
 	if string(firstCanonical) != string(secondCanonical) {
-		t.Errorf("canonical JSON differs for equivalent requests: %s != %s", firstCanonical, secondCanonical)
+		t.Errorf(
+			"canonical JSON differs for equivalent requests: %s != %s",
+			firstCanonical,
+			secondCanonical,
+		)
 	}
+
 	if firstFingerprint != secondFingerprint {
-		t.Errorf("fingerprints differ for equivalent requests: %s != %s", firstFingerprint, secondFingerprint)
+		t.Errorf(
+			"fingerprints differ for equivalent requests: %s != %s",
+			firstFingerprint,
+			secondFingerprint,
+		)
 	}
 }
 
@@ -126,26 +183,122 @@ func TestNormalizeOperationRequestRejectsInvalidRequests(t *testing.T) {
 		name    string
 		request string
 	}{
-		{name: "empty body", request: ""},
-		{name: "whitespace body", request: " \n\t "},
-		{name: "malformed JSON", request: `{"operationType":`},
-		{name: "missing operation type", request: `{}`},
-		{name: "operation type is not a string", request: `{"operationType":123}`},
-		{name: "top-level array", request: `[]`},
-		{name: "top-level null", request: `null`},
-		{name: "unsupported operation type", request: `{"operationType":"unknown"}`},
-		{name: "build missing revision", request: `{"operationType":"build"}`},
-		{name: "build revision too short", request: `{"operationType":"build","sourceRevision":"` + invalidRevisionLength + `"}`},
-		{name: "build uppercase revision", request: `{"operationType":"build","sourceRevision":"` + uppercaseRevision + `"}`},
-		{name: "build non-hex revision", request: `{"operationType":"build","sourceRevision":"` + nonHexRevision + `"}`},
-		{name: "build rejects unknown field", request: `{"operationType":"build","sourceRevision":"` + revision + `","artifactId":"` + validUUID + `"}`},
-		{name: "deploy missing artifact ID", request: `{"operationType":"deploy"}`},
-		{name: "deploy UUID missing hyphens", request: `{"operationType":"deploy","artifactId":"123e4567e89b12d3a456426614174000"}`},
-		{name: "deploy UUID has non-hex character", request: `{"operationType":"deploy","artifactId":"123e4567-e89b-12d3-a456-42661417400g"}`},
-		{name: "cleanup missing deployment ID", request: `{"operationType":"cleanup"}`},
-		{name: "reconcile missing parent operation ID", request: `{"operationType":"reconcile"}`},
-		{name: "multiple JSON values", request: `{"operationType":"build","sourceRevision":"` + revision + `"} {}`},
-		{name: "trailing non-JSON data", request: `{"operationType":"build","sourceRevision":"` + revision + `"} trailing`},
+		{
+			name:    "empty body",
+			request: "",
+		},
+		{
+			name:    "whitespace body",
+			request: " \n\t ",
+		},
+		{
+			name:    "malformed JSON",
+			request: `{"operationType":`,
+		},
+		{
+			name:    "missing operation type",
+			request: `{}`,
+		},
+		{
+			name:    "operation type is not a string",
+			request: `{"operationType":123}`,
+		},
+		{
+			name:    "top-level array",
+			request: `[]`,
+		},
+		{
+			name:    "top-level null",
+			request: `null`,
+		},
+		{
+			name:    "unsupported operation type",
+			request: `{"operationType":"unknown"}`,
+		},
+		{
+			name:    "build missing revision",
+			request: `{"operationType":"build"}`,
+		},
+		{
+			name:    "build revision too short",
+			request: `{"operationType":"build","sourceRevision":"` + invalidRevisionLength + `"}`,
+		},
+		{
+			name:    "build uppercase revision",
+			request: `{"operationType":"build","sourceRevision":"` + uppercaseRevision + `"}`,
+		},
+		{
+			name:    "build non-hex revision",
+			request: `{"operationType":"build","sourceRevision":"` + nonHexRevision + `"}`,
+		},
+		{
+			name:    "build rejects unknown field",
+			request: `{"operationType":"build","sourceRevision":"` + revision + `","artifactId":"` + validUUID + `"}`,
+		},
+		{
+			name:    "deploy missing artifact ID",
+			request: `{"operationType":"deploy","applicationPort":8080}`,
+		},
+		{
+			name:    "deploy missing application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `"}`,
+		},
+		{
+			name:    "deploy rejects zero application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":0}`,
+		},
+		{
+			name:    "deploy rejects negative application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":-1}`,
+		},
+		{
+			name:    "deploy rejects application port above maximum",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":65536}`,
+		},
+		{
+			name:    "deploy rejects fractional application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":8080.5}`,
+		},
+		{
+			name:    "deploy rejects string application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":"8080"}`,
+		},
+		{
+			name:    "deploy rejects boolean application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":true}`,
+		},
+		{
+			name:    "deploy rejects null application port",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":null}`,
+		},
+		{
+			name:    "deploy UUID missing hyphens",
+			request: `{"operationType":"deploy","artifactId":"123e4567e89b12d3a456426614174000","applicationPort":8080}`,
+		},
+		{
+			name:    "deploy UUID has non-hex character",
+			request: `{"operationType":"deploy","artifactId":"123e4567-e89b-12d3-a456-42661417400g","applicationPort":8080}`,
+		},
+		{
+			name:    "deploy rejects unknown field",
+			request: `{"operationType":"deploy","artifactId":"` + validUUID + `","applicationPort":8080,"hostPort":9000}`,
+		},
+		{
+			name:    "cleanup missing deployment ID",
+			request: `{"operationType":"cleanup"}`,
+		},
+		{
+			name:    "reconcile missing parent operation ID",
+			request: `{"operationType":"reconcile"}`,
+		},
+		{
+			name:    "multiple JSON values",
+			request: `{"operationType":"build","sourceRevision":"` + revision + `"} {}`,
+		},
+		{
+			name:    "trailing non-JSON data",
+			request: `{"operationType":"build","sourceRevision":"` + revision + `"} trailing`,
+		},
 	}
 
 	for _, test := range tests {
