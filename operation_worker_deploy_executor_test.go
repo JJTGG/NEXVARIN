@@ -239,6 +239,13 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 		)
 	}
 
+	if runtime.request.ApplicationPort != 8080 {
+		t.Errorf(
+			"runtime application port = %d, want 8080",
+			runtime.request.ApplicationPort,
+		)
+	}
+
 	// The runner normally records the executor's outcome.
 	record, err := recordOperationExecutionResult(
 		ctx,
