@@ -26,6 +26,10 @@ type operationWorkerDeployRuntimeRequest struct {
 
 	// ImageReference identifies the image stored in the archive.
 	ImageReference string
+
+	// ApplicationPort is the validated port the application listens
+	// on inside its container.
+	ApplicationPort int
 }
 
 // operationWorkerDeployRuntimeResult describes the instance
@@ -48,8 +52,8 @@ type operationWorkerDeployRuntimeResult struct {
 // but its outcome cannot be confirmed, the implementation must
 // wrap errOperationWorkerDeployRuntimeOutcomeUnknown.
 //
-// This interface does not implement container startup, health
-// checks, or preview routing.
+// Port publishing, application health checks, and preview routing
+// are implemented by subsequent runtime changes.
 type operationWorkerDeployRuntime interface {
 	Deploy(
 		ctx context.Context,
