@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -17,6 +19,10 @@ import (
 const (
 	operationWorkerDeployPodmanCommandTimeout = 2 * time.Minute
 	operationWorkerDeployPodmanOutputLimit    = 4 << 20
+
+	operationWorkerDeployPodmanReadinessTimeout       = 20 * time.Second
+	operationWorkerDeployPodmanReadinessProbeTimeout  = 2 * time.Second
+	operationWorkerDeployPodmanReadinessProbeInterval = 250 * time.Millisecond
 
 	operationWorkerDeployPodmanOperationLabel       = "io.nexvarin.operation-id"
 	operationWorkerDeployPodmanDeploymentLabel      = "io.nexvarin.deployment-id"
@@ -35,11 +41,11 @@ var errOperationWorkerDeployPodmanCommandInterrupted = errors.New(
 // a local rootless Podman installation.
 //
 // Deployments with a validated application port publish that container port
-// on a dynamically assigned host port bound to 127.0.0.1. A zero application
-// port retains the isolated, non-publishing mode for internal adapter tests;
-// API-created deploy requests cannot use that mode.
-// This adapter does not yet perform application health checks or activate
-// preview routing.
+// on a dynamically assigned host port bound to 127.0.0.1. The runtime confirms
+// the binding and waits for a successful HTTP response before reporting
+// deployment success. A zero application port retains isolated mode for
+// internal adapter tests; API-created deploy requests cannot use that mode.
+// Preview routing is not activated by this adapter.
 type operationWorkerDeployPodmanRuntime struct {
 	PodmanPath     string
 	CommandTimeout time.Duration
@@ -102,7 +108,12 @@ func (runtime operationWorkerDeployPodmanRuntime) Deploy(
 		}
 
 		if container.State.Running {
-			return runtime.resultForContainer(container)
+			return runtime.readyResultForContainer(
+				ctx,
+				containerName,
+				request,
+				container,
+			)
 		}
 
 		return runtime.startAndConfirm(
@@ -249,7 +260,12 @@ func (runtime operationWorkerDeployPodmanRuntime) Deploy(
 			)
 	}
 
-	return runtime.resultForContainer(container)
+	return runtime.readyResultForContainer(
+		ctx,
+		containerName,
+		request,
+		container,
+	)
 }
 
 func (runtime operationWorkerDeployPodmanRuntime) validateRequest(
@@ -477,7 +493,12 @@ func (runtime operationWorkerDeployPodmanRuntime) startAndConfirm(
 ) (operationWorkerDeployRuntimeResult, error) {
 	if runtime.containerMatches(existing, request) &&
 		existing.State.Running {
-		return runtime.resultForContainer(existing)
+		return runtime.readyResultForContainer(
+			ctx,
+			name,
+			request,
+			existing,
+		)
 	}
 
 	_, _, startErr := runtime.runPodman(
@@ -528,7 +549,226 @@ func (runtime operationWorkerDeployPodmanRuntime) startAndConfirm(
 			)
 	}
 
-	return runtime.resultForContainer(container)
+	return runtime.readyResultForContainer(
+		ctx,
+		name,
+		request,
+		container,
+	)
+}
+
+func (runtime operationWorkerDeployPodmanRuntime) readyResultForContainer(
+	ctx context.Context,
+	name string,
+	request operationWorkerDeployRuntimeRequest,
+	container *operationWorkerDeployPodmanContainer,
+) (operationWorkerDeployRuntimeResult, error) {
+	result, err := runtime.resultForContainer(container)
+	if err != nil {
+		return operationWorkerDeployRuntimeResult{}, err
+	}
+
+	if request.ApplicationPort == 0 {
+		return result, nil
+	}
+
+	hostPort, err := runtime.publishedApplicationHostPort(
+		ctx,
+		name,
+		request.ApplicationPort,
+	)
+	if err != nil {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"the published application port could not be verified: " + err.Error(),
+			)
+	}
+
+	if err := runtime.waitForApplicationHTTP(ctx, hostPort); err != nil {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"application HTTP readiness could not be confirmed: " + err.Error(),
+			)
+	}
+
+	return result, nil
+}
+
+// publishedApplicationHostPort accepts Podman's documented mapping form
+// ("8080/tcp -> 127.0.0.1:12345") and a bare host address, but rejects
+// wildcard, non-loopback, malformed, or ambiguous bindings.
+func (runtime operationWorkerDeployPodmanRuntime) publishedApplicationHostPort(
+	ctx context.Context,
+	containerName string,
+	applicationPort int,
+) (string, error) {
+	output, exitCode, err := runtime.runPodman(
+		ctx,
+		"port",
+		containerName,
+		strconv.Itoa(applicationPort)+"/tcp",
+	)
+	if err != nil {
+		return "", errors.New("Podman port inspection failed")
+	}
+
+	if exitCode != 0 {
+		return "", errors.New("Podman did not report a published application port")
+	}
+
+	lines := make([]string, 0, 1)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+
+	if len(lines) != 1 {
+		return "", errors.New("expected exactly one published application port binding")
+	}
+
+	binding := lines[0]
+	if strings.Contains(binding, "->") {
+		parts := strings.Split(binding, "->")
+		if len(parts) != 2 ||
+			strings.TrimSpace(parts[0]) != strconv.Itoa(applicationPort)+"/tcp" {
+			return "", errors.New("Podman returned an unexpected port mapping")
+		}
+
+		binding = strings.TrimSpace(parts[1])
+	}
+
+	host, hostPort, err := net.SplitHostPort(binding)
+	if err != nil {
+		return "", errors.New("Podman returned a malformed host port binding")
+	}
+
+	if host != "127.0.0.1" {
+		return "", errors.New("application port is not bound exclusively to 127.0.0.1")
+	}
+
+	portNumber, err := strconv.Atoi(hostPort)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", errors.New("Podman returned an invalid dynamically assigned host port")
+	}
+
+	return hostPort, nil
+}
+
+// waitForApplicationHTTP probes only the loopback host binding. It bypasses
+// environment proxies and does not follow redirects, so readiness cannot be
+// satisfied by a proxy or a redirect to a different host.
+func (runtime operationWorkerDeployPodmanRuntime) waitForApplicationHTTP(
+	ctx context.Context,
+	hostPort string,
+) error {
+	target := "http://" + net.JoinHostPort("127.0.0.1", hostPort) + "/"
+
+	dialer := &net.Dialer{
+		Timeout: operationWorkerDeployPodmanReadinessProbeTimeout,
+	}
+	transport := &http.Transport{
+		Proxy:      nil,
+		DialContext: dialer.DialContext,
+	}
+	defer transport.CloseIdleConnections()
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   operationWorkerDeployPodmanReadinessProbeTimeout,
+		CheckRedirect: func(
+			_ *http.Request,
+			_ []*http.Request,
+		) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	deadline := time.Now().Add(operationWorkerDeployPodmanReadinessTimeout)
+	lastResult := "the HTTP server did not become ready before the deadline"
+
+	for {
+		if ctx.Err() != nil {
+			return fmt.Errorf("readiness probe context ended: %w", ctx.Err())
+		}
+
+		if !time.Now().Before(deadline) {
+			break
+		}
+
+		probeContext, cancelProbe := context.WithTimeout(
+			ctx,
+			operationWorkerDeployPodmanReadinessProbeTimeout,
+		)
+
+		request, err := http.NewRequestWithContext(
+			probeContext,
+			http.MethodGet,
+			target,
+			nil,
+		)
+		if err != nil {
+			cancelProbe()
+			return fmt.Errorf("create HTTP readiness request: %w", err)
+		}
+
+		response, requestErr := client.Do(request)
+		if requestErr != nil {
+			lastResult = requestErr.Error()
+			cancelProbe()
+		} else {
+			_, readErr := io.Copy(
+				io.Discard,
+				io.LimitReader(response.Body, 4096),
+			)
+			closeErr := response.Body.Close()
+			statusCode := response.StatusCode
+			cancelProbe()
+
+			if statusCode >= http.StatusOK &&
+				statusCode < http.StatusMultipleChoices &&
+				readErr == nil &&
+				closeErr == nil {
+				return nil
+			}
+
+			lastResult = fmt.Sprintf(
+				"status=%d response_read_error=%v response_close_error=%v",
+				statusCode,
+				readErr,
+				closeErr,
+			)
+		}
+
+		if ctx.Err() != nil {
+			return fmt.Errorf("readiness probe context ended: %w", ctx.Err())
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+
+		delay := operationWorkerDeployPodmanReadinessProbeInterval
+		if remaining < delay {
+			delay = remaining
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("readiness probe context ended: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+
+	return fmt.Errorf(
+		"HTTP readiness failed at %s: %s",
+		target,
+		lastResult,
+	)
 }
 
 func (runtime operationWorkerDeployPodmanRuntime) resultForContainer(
