@@ -669,7 +669,7 @@ func (runtime operationWorkerDeployPodmanRuntime) waitForApplicationHTTP(
 		Timeout: operationWorkerDeployPodmanReadinessProbeTimeout,
 	}
 	transport := &http.Transport{
-		Proxy:      nil,
+		Proxy:       nil,
 		DialContext: dialer.DialContext,
 	}
 	defer transport.CloseIdleConnections()
