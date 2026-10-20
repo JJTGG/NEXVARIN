@@ -18,11 +18,11 @@ const (
 	operationWorkerDeployPodmanCommandTimeout = 2 * time.Minute
 	operationWorkerDeployPodmanOutputLimit    = 4 << 20
 
-	operationWorkerDeployPodmanOperationLabel          = "io.nexvarin.operation-id"
-	operationWorkerDeployPodmanDeploymentLabel         = "io.nexvarin.deployment-id"
-	operationWorkerDeployPodmanDigestLabel             = "io.nexvarin.artifact-digest"
-	operationWorkerDeployPodmanImageLabel              = "io.nexvarin.image-reference"
-	operationWorkerDeployPodmanApplicationPortLabel    = "io.nexvarin.application-port"
+	operationWorkerDeployPodmanOperationLabel       = "io.nexvarin.operation-id"
+	operationWorkerDeployPodmanDeploymentLabel      = "io.nexvarin.deployment-id"
+	operationWorkerDeployPodmanDigestLabel          = "io.nexvarin.artifact-digest"
+	operationWorkerDeployPodmanImageLabel           = "io.nexvarin.image-reference"
+	operationWorkerDeployPodmanApplicationPortLabel = "io.nexvarin.application-port"
 
 	operationWorkerDeployPodmanNamePrefix = "nexvarin-deploy-"
 )
