@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -249,6 +250,27 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 		return fmt.Errorf("configure artifact storage: %w", err)
 	}
 
+	podmanPath := strings.TrimSpace(
+		os.Getenv("NEXVARIN_PODMAN_PATH"),
+	)
+	if podmanPath == "" {
+		podmanPath = "podman"
+	}
+
+	resolvedPodman, err := exec.LookPath(podmanPath)
+	if err != nil {
+		return errors.New(
+			"Podman executable was not found; configure NEXVARIN_PODMAN_PATH",
+		)
+	}
+
+	resolvedPodman, err = filepath.Abs(resolvedPodman)
+	if err != nil {
+		return errors.New(
+			"could not resolve the absolute Podman executable path",
+		)
+	}
+
 	buildExecutor := operationWorkerBuildExecutor{
 		Pool:              pool,
 		BuildctlPath:      resolvedBuildctl,
@@ -257,9 +279,19 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 		BuildTimeout:      operationWorkerBuildTimeout,
 	}
 
+	deployExecutor := operationWorkerDeployExecutor{
+		Pool:              pool,
+		ArtifactDirectory: artifactDirectory,
+		Runtime: operationWorkerDeployPodmanRuntime{
+			PodmanPath:     resolvedPodman,
+			CommandTimeout: operationWorkerDeployPodmanCommandTimeout,
+		},
+	}
+
 	executor := newOperationExecutorMux(
 		map[operationType]operationExecutor{
-			operationTypeBuild: buildExecutor,
+			operationTypeBuild:  buildExecutor,
+			operationTypeDeploy: deployExecutor,
 		},
 	)
 
@@ -287,6 +319,11 @@ func runOperationWorkerProcess(pool *pgxpool.Pool) error {
 		operationWorkerPollInterval.String(),
 		"lease_duration",
 		operationWorkerLeaseDuration.String(),
+		"registered_operation_types",
+		[]string{
+			string(operationTypeBuild),
+			string(operationTypeDeploy),
+		},
 	)
 
 	if err := worker.Run(signalContext); err != nil {
