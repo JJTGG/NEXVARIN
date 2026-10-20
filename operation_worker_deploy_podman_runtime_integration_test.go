@@ -218,11 +218,11 @@ func TestOperationWorkerDeployPodmanRuntimeLiveRootlessIntegration(
 	}
 
 	request := operationWorkerDeployRuntimeRequest{
-		OperationID:    operationWorkerDeployPodmanIntegrationOperationID,
-		DeploymentID:   operationWorkerDeployPodmanIntegrationDeploymentID,
-		ArtifactPath:   artifactPath,
-		ArtifactDigest: artifactDigest,
-		ImageReference: imageReference,
+		OperationID:     operationWorkerDeployPodmanIntegrationOperationID,
+		DeploymentID:    operationWorkerDeployPodmanIntegrationDeploymentID,
+		ArtifactPath:    artifactPath,
+		ArtifactDigest:  artifactDigest,
+		ImageReference:  imageReference,
 		ApplicationPort: 8080,
 	}
 
