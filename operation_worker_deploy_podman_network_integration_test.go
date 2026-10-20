@@ -92,11 +92,10 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		t.Fatalf("create readiness integration image reference: %v", err)
 	}
 
-	suffix := strconv.Itoa(os.Getpid())
-	containerName := "nexvarin-loopback-probe-" + suffix
-	networkName := "nexvarin-loopback-probe-net-" + suffix
+	containerName := "nexvarin-loopback-probe-" +
+		strconv.Itoa(os.Getpid())
 
-	// Always attempt cleanup, including if the readiness test fails.
+	// Always attempt cleanup, including if readiness fails.
 	defer func() {
 		cleanupContext, cancelCleanup := context.WithTimeout(
 			context.Background(),
@@ -111,14 +110,6 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 			"rm",
 			"--force",
 			containerName,
-		)
-
-		_, _ = runOperationWorkerDeployPodmanIntegrationCommand(
-			cleanupContext,
-			podmanPath,
-			"network",
-			"rm",
-			networkName,
 		)
 
 		_, _ = runOperationWorkerDeployPodmanIntegrationCommand(
@@ -162,22 +153,8 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		)
 	}
 
-	// Use a standard bridge network for this port-forwarding test.
-	// This test verifies loopback publishing, not outbound-network isolation.
-	if output, err := runOperationWorkerDeployPodmanIntegrationCommand(
-		ctx,
-		podmanPath,
-		"network",
-		"create",
-		networkName,
-	); err != nil {
-		t.Fatalf(
-			"create readiness integration network: %v; output: %s",
-			err,
-			strings.TrimSpace(string(output)),
-		)
-	}
-
+	// Explicitly select a documented rootless networking mode that
+	// supports publishing container ports.
 	if output, err := runOperationWorkerDeployPodmanIntegrationCommand(
 		ctx,
 		podmanPath,
@@ -186,7 +163,7 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		"--name",
 		containerName,
 		"--network",
-		networkName,
+		"slirp4netns",
 		"--publish",
 		"127.0.0.1::8080/tcp",
 		"--pull=never",
@@ -198,7 +175,7 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		imageReference,
 	); err != nil {
 		t.Fatalf(
-			"start HTTP probe container on bridge network: %v; output: %s",
+			"start HTTP probe container with rootless slirp4netns networking: %v; output: %s",
 			err,
 			strings.TrimSpace(string(output)),
 		)
@@ -219,7 +196,7 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 		)
 	}
 
-	// Do not continue unless Podman confirms an explicit IPv4 loopback bind.
+	// Require an explicit IPv4 loopback binding. Never accept a wildcard bind.
 	binding := ""
 	for _, line := range strings.Split(string(portOutput), "\n") {
 		index := strings.LastIndex(line, "127.0.0.1:")
@@ -230,9 +207,42 @@ func TestOperationWorkerPodmanLoopbackHTTPReadinessIntegration(
 	}
 
 	if binding == "" {
+		stateOutput, stateErr := runOperationWorkerDeployPodmanIntegrationCommand(
+			ctx,
+			podmanPath,
+			"container",
+			"inspect",
+			"--format",
+			"{{.State.Status}}",
+			containerName,
+		)
+
+		mappingsOutput, mappingsErr := runOperationWorkerDeployPodmanIntegrationCommand(
+			ctx,
+			podmanPath,
+			"container",
+			"inspect",
+			"--format",
+			"{{json .NetworkSettings.Ports}}",
+			containerName,
+		)
+
+		logsOutput, logsErr := runOperationWorkerDeployPodmanIntegrationCommand(
+			ctx,
+			podmanPath,
+			"logs",
+			containerName,
+		)
+
 		t.Fatalf(
-			"expected a published 127.0.0.1 binding; Podman port output: %q",
+			"expected a published 127.0.0.1 binding; port_output=%q container_state=%q state_error=%v port_mappings=%q mappings_error=%v container_logs=%q logs_error=%v",
 			strings.TrimSpace(string(portOutput)),
+			strings.TrimSpace(string(stateOutput)),
+			stateErr,
+			strings.TrimSpace(string(mappingsOutput)),
+			mappingsErr,
+			strings.TrimSpace(string(logsOutput)),
+			logsErr,
 		)
 	}
 
