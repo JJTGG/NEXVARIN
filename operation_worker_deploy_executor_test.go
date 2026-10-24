@@ -176,6 +176,7 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 	runtime := &operationWorkerDeployExecutorTestRuntime{
 		result: operationWorkerDeployRuntimeResult{
 			RuntimeInstanceReference: "test-runtime-instance-001",
+			ReadinessVerified:        true,
 		},
 	}
 
@@ -303,9 +304,9 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 		)
 	}
 
-	if observedState != "deploying" {
+	if observedState != "ready" {
 		t.Errorf(
-			"observed state = %q, want deploying",
+			"observed state = %q, want ready after verified readiness",
 			observedState,
 		)
 	}
