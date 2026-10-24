@@ -591,6 +591,9 @@ func (runtime operationWorkerDeployPodmanRuntime) readyResultForContainer(
 			)
 	}
 
+	// Readiness is asserted only after the loopback HTTP probe succeeds.
+	result.ReadinessVerified = true
+
 	return result, nil
 }
 
