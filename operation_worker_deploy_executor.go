@@ -23,9 +23,6 @@ type operationWorkerDeployExecutor struct {
 
 // Execute verifies the deployment inputs, ensures a durable deployment
 // record exists, invokes the configured runtime, and persists its result.
-//
-// This executor is not registered by main.go until a real runtime adapter
-// is configured. Tests can inject a fake runtime without starting containers.
 func (executor operationWorkerDeployExecutor) Execute(
 	ctx context.Context,
 	task operationWorkerTask,
@@ -216,6 +213,13 @@ func (executor operationWorkerDeployExecutor) Execute(
 		)
 	}
 
+	// A readiness claim is accepted only for a valid application port.
+	// An instance may exist without the application having passed its
+	// readiness probe, so that case must never be persisted as ready.
+	readinessVerified := runtimeResult.ReadinessVerified &&
+		task.Request.ApplicationPort >= 1 &&
+		task.Request.ApplicationPort <= maxOperationApplicationPort
+
 	if err := recordOperationWorkerDeployRuntimeResult(
 		ctx,
 		executor.Pool,
@@ -223,6 +227,7 @@ func (executor operationWorkerDeployExecutor) Execute(
 		deployment,
 		artifact,
 		runtimeResult.RuntimeInstanceReference,
+		readinessVerified,
 	); err != nil {
 		return reconciliationDeployResult(
 			"deployment_result_persistence_unknown",
@@ -287,11 +292,9 @@ func reconciliationDeployResult(
 }
 
 // recordOperationWorkerDeployRuntimeResult stores the runtime instance
-// reference while confirming that this worker still owns the operation
-// lease.
-//
-// The deployment remains in "deploying" state. This function deliberately
-// does not claim the application is healthy or ready.
+// reference and marks the deployment ready only when readiness has been
+// verified. It also confirms that this worker still owns the operation
+// lease before committing the update.
 func recordOperationWorkerDeployRuntimeResult(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -299,6 +302,7 @@ func recordOperationWorkerDeployRuntimeResult(
 	deployment operationWorkerDeployRecord,
 	artifact operationWorkerDeployArtifact,
 	runtimeInstanceReference string,
+	readinessVerified bool,
 ) error {
 	if ctx == nil {
 		return errors.New(
@@ -317,6 +321,14 @@ func recordOperationWorkerDeployRuntimeResult(
 	) {
 		return errors.New(
 			"runtime instance reference is invalid",
+		)
+	}
+
+	if readinessVerified &&
+		(task.Request.ApplicationPort < 1 ||
+			task.Request.ApplicationPort > maxOperationApplicationPort) {
+		return errors.New(
+			"verified deployment readiness requires a valid application port",
 		)
 	}
 
@@ -443,8 +455,11 @@ func recordOperationWorkerDeployRuntimeResult(
 	err = tx.QueryRow(ctx, `
 		UPDATE deployments
 		SET
-			observed_state = 'deploying',
-			runtime_instance_ref = $6,
+			observed_state = CASE
+				WHEN $6::boolean THEN 'ready'
+				ELSE 'deploying'
+			END,
+			runtime_instance_ref = $7,
 			updated_at = now()
 		WHERE id = $1::uuid
 		  AND project_id = $2::uuid
@@ -460,6 +475,7 @@ func recordOperationWorkerDeployRuntimeResult(
 		repositoryID,
 		artifactID,
 		operationID,
+		readinessVerified,
 		runtimeInstanceReference,
 	).Scan(&updatedDeploymentID)
 
@@ -469,7 +485,7 @@ func recordOperationWorkerDeployRuntimeResult(
 
 	if err != nil {
 		return fmt.Errorf(
-			"persist deployment runtime reference: %w",
+			"persist deployment runtime result: %w",
 			err,
 		)
 	}
