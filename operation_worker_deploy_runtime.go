@@ -38,6 +38,10 @@ type operationWorkerDeployRuntimeResult struct {
 	// RuntimeInstanceReference is the runtime's stable identifier
 	// for the application instance.
 	RuntimeInstanceReference string
+
+	// ReadinessVerified is true only when the runtime has successfully
+	// completed its configured application readiness probe.
+	ReadinessVerified bool
 }
 
 // operationWorkerDeployRuntime is the boundary between NEXVARIN's
@@ -47,13 +51,15 @@ type operationWorkerDeployRuntimeResult struct {
 // deployment IDs. Repeated attempts must not create duplicate
 // application instances.
 //
+// ReadinessVerified must be true only after the configured application
+// readiness probe succeeds. An instance may exist while readiness
+// remains unverified; the executor must not persist that instance as
+// ready.
+//
 // An ordinary error must mean the implementation knows no runtime
 // side effect remains active. If a side effect might have occurred
 // but its outcome cannot be confirmed, the implementation must
 // wrap errOperationWorkerDeployRuntimeOutcomeUnknown.
-//
-// Port publishing, application health checks, and preview routing
-// are implemented by subsequent runtime changes.
 type operationWorkerDeployRuntime interface {
 	Deploy(
 		ctx context.Context,
