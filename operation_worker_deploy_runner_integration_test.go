@@ -160,9 +160,9 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 	var (
 		operationStatusValue string
 		leaseOwner           *string
-		finishedAt            *time.Time
-		errorCode             *string
-		errorSummary          *string
+		finishedAt           *time.Time
+		errorCode            *string
+		errorSummary         *string
 	)
 
 	err = fixture.pool.QueryRow(ctx, `
