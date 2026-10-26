@@ -39,6 +39,12 @@ type operationWorkerDeployRuntimeResult struct {
 	// for the application instance.
 	RuntimeInstanceReference string
 
+	// UpstreamAddress is the host:port through which the local ingress
+	// adapter can reach the application. For the initial Podman runtime,
+	// this must be a verified loopback-published address.
+	// This address alone does not prove application readiness.
+	UpstreamAddress string
+
 	// ReadinessVerified is true only when the runtime has successfully
 	// completed its configured application readiness probe.
 	ReadinessVerified bool
@@ -51,10 +57,14 @@ type operationWorkerDeployRuntimeResult struct {
 // deployment IDs. Repeated attempts must not create duplicate
 // application instances.
 //
+// UpstreamAddress must only identify an address confirmed to belong
+// to the requested runtime instance and its published application port.
+// For the initial local ingress design, the address must be loopback-bound.
+//
 // ReadinessVerified must be true only after the configured application
 // readiness probe succeeds. An instance may exist while readiness
 // remains unverified; the executor must not persist that instance as
-// ready.
+// ready or activate its preview route.
 //
 // An ordinary error must mean the implementation knows no runtime
 // side effect remains active. If a side effect might have occurred
