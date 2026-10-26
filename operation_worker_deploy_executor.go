@@ -213,9 +213,8 @@ func (executor operationWorkerDeployExecutor) Execute(
 		)
 	}
 
-	// A readiness claim is accepted only for a valid application port.
-	// An instance may exist without the application having passed its
-	// readiness probe, so that case must never be persisted as ready.
+	// Only a verified readiness result for a valid application port can
+	// transition the deployment to ready.
 	readinessVerified := runtimeResult.ReadinessVerified &&
 		task.Request.ApplicationPort >= 1 &&
 		task.Request.ApplicationPort <= maxOperationApplicationPort
@@ -235,6 +234,16 @@ func (executor operationWorkerDeployExecutor) Execute(
 		)
 	}
 
+	if !readinessVerified {
+		// Preserve the known instance reference and deploying state, but
+		// do not report operation success before application readiness
+		// has been verified. Reconciliation must establish the outcome.
+		return reconciliationDeployResult(
+			"deployment_readiness_unverified",
+			"The runtime instance exists, but application readiness was not verified.",
+		)
+	}
+
 	return operationExecutionResult{
 		Disposition: operationExecutionSucceeded,
 	}
@@ -244,7 +253,6 @@ func (executor operationWorkerDeployExecutor) retryDelay() time.Duration {
 	if executor.RetryDelay <= 0 {
 		return operationWorkerDeployRetryDelay
 	}
-
 	return executor.RetryDelay
 }
 
