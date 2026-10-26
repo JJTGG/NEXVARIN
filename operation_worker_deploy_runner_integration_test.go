@@ -15,6 +15,7 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 	runtime := &operationWorkerDeployExecutorTestRuntime{
 		result: operationWorkerDeployRuntimeResult{
 			RuntimeInstanceReference: "test-worker-runtime-instance-001",
+			ReadinessVerified:        true,
 		},
 	}
 
@@ -159,9 +160,9 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 	var (
 		operationStatusValue string
 		leaseOwner           *string
-		finishedAt           *time.Time
-		errorCode            *string
-		errorSummary         *string
+		finishedAt            *time.Time
+		errorCode             *string
+		errorSummary          *string
 	)
 
 	err = fixture.pool.QueryRow(ctx, `
@@ -257,9 +258,9 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 		)
 	}
 
-	if observedState != "deploying" {
+	if observedState != "ready" {
 		t.Errorf(
-			"deployment observed state = %q, want deploying",
+			"deployment observed state = %q, want ready after verified readiness",
 			observedState,
 		)
 	}
