@@ -328,6 +328,133 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 	}
 }
 
+func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
+	t *testing.T,
+) {
+	runtime := &operationWorkerDeployExecutorTestRuntime{
+		result: operationWorkerDeployRuntimeResult{
+			RuntimeInstanceReference: "test-runtime-unready-instance-001",
+			ReadinessVerified:        false,
+		},
+	}
+
+	fixture, task, artifact, executor :=
+		newOperationWorkerDeployExecutorTestFixture(t, runtime)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	result := executor.Execute(ctx, task)
+
+	if result.Disposition != operationExecutionNeedsReconciliation {
+		t.Fatalf(
+			"disposition = %q, want needs_reconciliation; code=%q summary=%q",
+			result.Disposition,
+			result.ErrorCode,
+			result.ErrorSummary,
+		)
+	}
+
+	if result.ErrorCode != "deployment_readiness_unverified" {
+		t.Errorf(
+			"error code = %q, want deployment_readiness_unverified",
+			result.ErrorCode,
+		)
+	}
+
+	if runtime.calls != 1 {
+		t.Fatalf("runtime calls = %d, want 1", runtime.calls)
+	}
+
+	if runtime.request.DeploymentID == "" {
+		t.Fatal("runtime received an empty deployment ID")
+	}
+
+	// The runner normally records the executor's outcome. The operation
+	// must not become successful while the runtime is not verified ready.
+	record, err := recordOperationExecutionResult(
+		ctx,
+		fixture.pool,
+		task,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("record unverified-readiness result: %v", err)
+	}
+
+	if record.Status != operationStatusNeedsReconciliation {
+		t.Errorf(
+			"operation status = %q, want needs_reconciliation",
+			record.Status,
+		)
+	}
+
+	var (
+		persistedDeploymentID string
+		observedState         string
+		runtimeReference      string
+		persistedArtifactID   string
+	)
+
+	err = fixture.pool.QueryRow(ctx, `
+		SELECT
+			id::text,
+			observed_state,
+			COALESCE(runtime_instance_ref, ''),
+			artifact_id::text
+		FROM deployments
+		WHERE id = $1::uuid
+		  AND project_id = $2::uuid
+		  AND repository_id = $3::uuid
+	`,
+		runtime.request.DeploymentID,
+		fixture.projectID,
+		fixture.repositoryID,
+	).Scan(
+		&persistedDeploymentID,
+		&observedState,
+		&runtimeReference,
+		&persistedArtifactID,
+	)
+	if err != nil {
+		t.Fatalf("read deployment with unverified readiness: %v", err)
+	}
+
+	if persistedDeploymentID != runtime.request.DeploymentID {
+		t.Errorf(
+			"deployment ID = %q, want %q",
+			persistedDeploymentID,
+			runtime.request.DeploymentID,
+		)
+	}
+
+	if observedState != "deploying" {
+		t.Errorf(
+			"observed state = %q, want deploying until readiness is verified",
+			observedState,
+		)
+	}
+
+	if runtimeReference != runtime.result.RuntimeInstanceReference {
+		t.Errorf(
+			"runtime reference = %q, want %q",
+			runtimeReference,
+			runtime.result.RuntimeInstanceReference,
+		)
+	}
+
+	if persistedArtifactID != artifact.ID {
+		t.Errorf(
+			"persisted artifact ID = %q, want %q",
+			persistedArtifactID,
+			artifact.ID,
+		)
+	}
+}
+
 func TestOperationWorkerDeployExecutorIntegrationRetriesKnownRuntimeFailure(
 	t *testing.T,
 ) {
