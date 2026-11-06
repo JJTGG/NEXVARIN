@@ -270,6 +270,7 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 		persistedDeploymentID string
 		observedState         string
 		runtimeReference      string
+		upstreamAddress       string
 		persistedArtifactID   string
 	)
 
@@ -278,6 +279,7 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 			id::text,
 			observed_state,
 			COALESCE(runtime_instance_ref, ''),
+			COALESCE(upstream_address, ''),
 			artifact_id::text
 		FROM deployments
 		WHERE id = $1::uuid
@@ -291,6 +293,7 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 		&persistedDeploymentID,
 		&observedState,
 		&runtimeReference,
+		&upstreamAddress,
 		&persistedArtifactID,
 	)
 	if err != nil {
@@ -320,6 +323,14 @@ func TestOperationWorkerDeployExecutorIntegrationSucceeds(
 		)
 	}
 
+	if upstreamAddress != runtime.result.UpstreamAddress {
+		t.Errorf(
+			"upstream address = %q, want %q",
+			upstreamAddress,
+			runtime.result.UpstreamAddress,
+		)
+	}
+
 	if persistedArtifactID != artifact.ID {
 		t.Errorf(
 			"persisted artifact ID = %q, want %q",
@@ -335,6 +346,7 @@ func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
 	runtime := &operationWorkerDeployExecutorTestRuntime{
 		result: operationWorkerDeployRuntimeResult{
 			RuntimeInstanceReference: "test-runtime-unready-instance-001",
+			UpstreamAddress:          "127.0.0.1:32781",
 			ReadinessVerified:        false,
 		},
 	}
@@ -397,6 +409,7 @@ func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
 		persistedDeploymentID string
 		observedState         string
 		runtimeReference      string
+		upstreamAddress       string
 		persistedArtifactID   string
 	)
 
@@ -405,6 +418,7 @@ func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
 			id::text,
 			observed_state,
 			COALESCE(runtime_instance_ref, ''),
+			COALESCE(upstream_address, ''),
 			artifact_id::text
 		FROM deployments
 		WHERE id = $1::uuid
@@ -418,6 +432,7 @@ func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
 		&persistedDeploymentID,
 		&observedState,
 		&runtimeReference,
+		&upstreamAddress,
 		&persistedArtifactID,
 	)
 	if err != nil {
@@ -447,12 +462,227 @@ func TestOperationWorkerDeployExecutorIntegrationReconcilesUnverifiedReadiness(
 		)
 	}
 
+	if upstreamAddress != "" {
+		t.Errorf(
+			"upstream address = %q, want empty when readiness is unverified",
+			upstreamAddress,
+		)
+	}
+
 	if persistedArtifactID != artifact.ID {
 		t.Errorf(
 			"persisted artifact ID = %q, want %q",
 			persistedArtifactID,
 			artifact.ID,
 		)
+	}
+}
+
+func TestOperationWorkerDeployExecutorIntegrationReconcilesInvalidUpstreamAddress(
+	t *testing.T,
+) {
+	runtime := &operationWorkerDeployExecutorTestRuntime{
+		result: operationWorkerDeployRuntimeResult{
+			RuntimeInstanceReference: "test-runtime-invalid-upstream-instance-001",
+			UpstreamAddress:          "10.20.30.40:32781",
+			ReadinessVerified:        true,
+		},
+	}
+
+	fixture, task, artifact, executor :=
+		newOperationWorkerDeployExecutorTestFixture(t, runtime)
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	result := executor.Execute(ctx, task)
+
+	if result.Disposition != operationExecutionNeedsReconciliation {
+		t.Fatalf(
+			"disposition = %q, want needs_reconciliation; code=%q summary=%q",
+			result.Disposition,
+			result.ErrorCode,
+			result.ErrorSummary,
+		)
+	}
+
+	if result.ErrorCode != "deployment_upstream_address_invalid" {
+		t.Errorf(
+			"error code = %q, want deployment_upstream_address_invalid",
+			result.ErrorCode,
+		)
+	}
+
+	if runtime.calls != 1 {
+		t.Fatalf("runtime calls = %d, want 1", runtime.calls)
+	}
+
+	record, err := recordOperationExecutionResult(
+		ctx,
+		fixture.pool,
+		task,
+		result,
+	)
+	if err != nil {
+		t.Fatalf("record invalid-upstream operation result: %v", err)
+	}
+
+	if record.Status != operationStatusNeedsReconciliation {
+		t.Errorf(
+			"operation status = %q, want needs_reconciliation",
+			record.Status,
+		)
+	}
+
+	var (
+		observedState       string
+		runtimeReference    string
+		upstreamAddress     string
+		persistedArtifactID string
+	)
+
+	err = fixture.pool.QueryRow(ctx, `
+		SELECT
+			observed_state,
+			COALESCE(runtime_instance_ref, ''),
+			COALESCE(upstream_address, ''),
+			artifact_id::text
+		FROM deployments
+		WHERE id = $1::uuid
+		  AND project_id = $2::uuid
+		  AND repository_id = $3::uuid
+	`,
+		runtime.request.DeploymentID,
+		fixture.projectID,
+		fixture.repositoryID,
+	).Scan(
+		&observedState,
+		&runtimeReference,
+		&upstreamAddress,
+		&persistedArtifactID,
+	)
+	if err != nil {
+		t.Fatalf("read deployment after invalid upstream: %v", err)
+	}
+
+	if observedState != "deploying" {
+		t.Errorf(
+			"observed state = %q, want deploying",
+			observedState,
+		)
+	}
+
+	if runtimeReference != runtime.result.RuntimeInstanceReference {
+		t.Errorf(
+			"runtime reference = %q, want %q",
+			runtimeReference,
+			runtime.result.RuntimeInstanceReference,
+		)
+	}
+
+	if upstreamAddress != "" {
+		t.Errorf(
+			"upstream address = %q, want empty for invalid upstream",
+			upstreamAddress,
+		)
+	}
+
+	if persistedArtifactID != artifact.ID {
+		t.Errorf(
+			"persisted artifact ID = %q, want %q",
+			persistedArtifactID,
+			artifact.ID,
+		)
+	}
+}
+
+func TestValidOperationWorkerDeployUpstreamAddress(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{
+			name:  "minimum port",
+			value: "127.0.0.1:1",
+			want:  true,
+		},
+		{
+			name:  "ordinary port",
+			value: "127.0.0.1:8080",
+			want:  true,
+		},
+		{
+			name:  "maximum port",
+			value: "127.0.0.1:65535",
+			want:  true,
+		},
+		{
+			name:  "missing address",
+			value: "",
+			want:  false,
+		},
+		{
+			name:  "non-loopback IPv4 address",
+			value: "10.20.30.40:8080",
+			want:  false,
+		},
+		{
+			name:  "all-interfaces address",
+			value: "0.0.0.0:8080",
+			want:  false,
+		},
+		{
+			name:  "hostname",
+			value: "localhost:8080",
+			want:  false,
+		},
+		{
+			name:  "IPv6 loopback",
+			value: "[::1]:8080",
+			want:  false,
+		},
+		{
+			name:  "zero port",
+			value: "127.0.0.1:0",
+			want:  false,
+		},
+		{
+			name:  "port above maximum",
+			value: "127.0.0.1:65536",
+			want:  false,
+		},
+		{
+			name:  "noncanonical leading zero",
+			value: "127.0.0.1:08080",
+			want:  false,
+		},
+		{
+			name:  "leading whitespace",
+			value: " 127.0.0.1:8080",
+			want:  false,
+		},
+		{
+			name:  "trailing whitespace",
+			value: "127.0.0.1:8080 ",
+			want:  false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := validOperationWorkerDeployUpstreamAddress(test.value); got != test.want {
+				t.Errorf(
+					"validOperationWorkerDeployUpstreamAddress(%q) = %t, want %t",
+					test.value,
+					got,
+					test.want,
+				)
+			}
+		})
 	}
 }
 
