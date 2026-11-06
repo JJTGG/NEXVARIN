@@ -1,4 +1,3 @@
-
 name: NEXVARIN validation
 
 on:
@@ -121,6 +120,11 @@ jobs:
               'outbox_pending_delivery_idx',
               'artifacts_build_digest_unique'
             ];
+            required_deployment_constraints text[] := ARRAY[
+              'deployments_upstream_address_valid',
+              'deployments_upstream_address_legacy_shape',
+              'deployments_ready_requires_upstream_address'
+            ];
             item text;
           BEGIN
             FOREACH item IN ARRAY required_tables LOOP
@@ -159,11 +163,67 @@ jobs:
               RAISE EXCEPTION
                 'Reconciliation parent constraint is missing';
             END IF;
+
+            FOREACH item IN ARRAY required_deployment_constraints LOOP
+              IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'public.deployments'::regclass
+                  AND conname = item
+                  AND contype = 'c'
+              ) THEN
+                RAISE EXCEPTION
+                  'Required deployment constraint % is missing', item;
+              END IF;
+            END LOOP;
+
+            IF NOT EXISTS (
+              SELECT 1
+              FROM pg_attribute
+              WHERE attrelid = 'public.deployments'::regclass
+                AND attname = 'upstream_address_required'
+                AND attnotnull
+                AND NOT attisdropped
+            ) THEN
+              RAISE EXCEPTION
+                'Required upstream-address enforcement column is missing or nullable';
+            END IF;
+
+            IF to_regprocedure(
+              'public.enforce_deployment_upstream_address_requirement()'
+            ) IS NULL THEN
+              RAISE EXCEPTION
+                'Deployment upstream-address enforcement function is missing';
+            END IF;
+
+            IF NOT EXISTS (
+              SELECT 1
+              FROM pg_trigger
+              WHERE tgrelid = 'public.deployments'::regclass
+                AND tgname = 'deployments_upstream_address_requirement_guard'
+                AND NOT tgisinternal
+                AND tgenabled <> 'D'
+            ) THEN
+              RAISE EXCEPTION
+                'Deployment upstream-address enforcement trigger is missing or disabled';
+            END IF;
           END
           $$;
           SQL
 
           echo "PostgreSQL migrations and schema checks passed."
+
+      - name: Test upstream-address migration compatibility
+        shell: bash
+        env:
+          TEST_DATABASE_URL: postgresql://nexvarin_test:nexvarin_test@127.0.0.1:5432/nexvarin_test?sslmode=disable
+        run: |
+          psql "$TEST_DATABASE_URL" \
+            --no-psqlrc \
+            --set=ON_ERROR_STOP=1 \
+            --file=db/tests/000005_upstream_address_compatibility.sql
+
+          echo "Upstream-address migration compatibility tests passed."
 
       - name: Resolve Go dependencies
         run: go mod tidy
