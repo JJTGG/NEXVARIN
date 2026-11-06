@@ -436,18 +436,18 @@ func newOperationWorkerDeployPodmanPortTestRuntime(
 		t.Fatalf("encode fake container state: %v", err)
 	}
 
-	script := \`#!/bin/sh
+	script := `#!/bin/sh
 set -eu
 
-printf '%s\\n' "$*" >> "$FAKE_PODMAN_LOG"
+printf '%s\n' "$*" >> "$FAKE_PODMAN_LOG"
 
-case "\${1-}" in
+case "${1-}" in
   info)
-    printf '%s\\n' "true"
+    printf '%s\n' "true"
     exit 0
     ;;
   container)
-    case "\${2-}" in
+    case "${2-}" in
       exists)
         if [ -f "$FAKE_PODMAN_STATE" ]; then
           exit 0
@@ -464,7 +464,7 @@ case "\${1-}" in
           printf '%s' "$inspect_count" > "$FAKE_PODMAN_INSPECT_COUNT_FILE"
 
           if [ "$inspect_count" -eq 2 ] &&
-            [ -n "\${FAKE_PODMAN_POST_PROBE_STATE_JSON:-}" ]; then
+            [ -n "${FAKE_PODMAN_POST_PROBE_STATE_JSON:-}" ]; then
             printf '%s' "$FAKE_PODMAN_POST_PROBE_STATE_JSON" > "$FAKE_PODMAN_STATE"
           fi
 
@@ -483,7 +483,7 @@ case "\${1-}" in
     exit 0
     ;;
   port)
-    if [ "\${3-}" != "$FAKE_PODMAN_APPLICATION_PORT_SPEC" ]; then
+    if [ "${3-}" != "$FAKE_PODMAN_APPLICATION_PORT_SPEC" ]; then
       exit 125
     fi
 
@@ -495,17 +495,17 @@ case "\${1-}" in
     printf '%s' "$port_count" > "$FAKE_PODMAN_PORT_COUNT_FILE"
 
     if [ "$port_count" -eq 2 ] &&
-      [ -n "\${FAKE_PODMAN_POST_PROBE_PORT_OUTPUT:-}" ]; then
-      printf '%s\\n' "$FAKE_PODMAN_POST_PROBE_PORT_OUTPUT"
+      [ -n "${FAKE_PODMAN_POST_PROBE_PORT_OUTPUT:-}" ]; then
+      printf '%s\n' "$FAKE_PODMAN_POST_PROBE_PORT_OUTPUT"
     else
-      printf '%s\\n' "$FAKE_PODMAN_PORT_OUTPUT"
+      printf '%s\n' "$FAKE_PODMAN_PORT_OUTPUT"
     fi
     exit 0
     ;;
 esac
 
 exit 125
-\`
+`
 
 	if err := os.WriteFile(
 		podmanPath,
