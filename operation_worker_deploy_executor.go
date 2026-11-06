@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -213,11 +215,24 @@ func (executor operationWorkerDeployExecutor) Execute(
 		)
 	}
 
-	// Only a verified readiness result for a valid application port can
-	// transition the deployment to ready.
-	readinessVerified := runtimeResult.ReadinessVerified &&
+	// Runtime readiness is necessary but not sufficient for a ready
+	// deployment. The application port must be valid and the runtime
+	// must return a canonical loopback upstream for local ingress.
+	runtimeReadinessVerified := runtimeResult.ReadinessVerified &&
 		task.Request.ApplicationPort >= 1 &&
 		task.Request.ApplicationPort <= maxOperationApplicationPort
+
+	upstreamAddressVerified := validOperationWorkerDeployUpstreamAddress(
+		runtimeResult.UpstreamAddress,
+	)
+
+	readinessVerified := runtimeReadinessVerified &&
+		upstreamAddressVerified
+
+	upstreamAddress := ""
+	if readinessVerified {
+		upstreamAddress = runtimeResult.UpstreamAddress
+	}
 
 	if err := recordOperationWorkerDeployRuntimeResult(
 		ctx,
@@ -226,6 +241,7 @@ func (executor operationWorkerDeployExecutor) Execute(
 		deployment,
 		artifact,
 		runtimeResult.RuntimeInstanceReference,
+		upstreamAddress,
 		readinessVerified,
 	); err != nil {
 		return reconciliationDeployResult(
@@ -234,10 +250,20 @@ func (executor operationWorkerDeployExecutor) Execute(
 		)
 	}
 
+	if runtimeReadinessVerified && !upstreamAddressVerified {
+		// The application responded to its readiness probe, but the
+		// runtime did not provide a valid loopback destination. Keep
+		// the deployment in deploying state and require reconciliation.
+		return reconciliationDeployResult(
+			"deployment_upstream_address_invalid",
+			"The runtime reported readiness but its upstream address was not a valid loopback address.",
+		)
+	}
+
 	if !readinessVerified {
 		// Preserve the known instance reference and deploying state, but
 		// do not report operation success before application readiness
-		// has been verified. Reconciliation must establish the outcome.
+		// and its ingress destination have both been verified.
 		return reconciliationDeployResult(
 			"deployment_readiness_unverified",
 			"The runtime instance exists, but application readiness was not verified.",
@@ -262,6 +288,27 @@ func validDeployRuntimeInstanceReference(value string) bool {
 		len(value) <= 1024 &&
 		utf8.ValidString(value) &&
 		!strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validOperationWorkerDeployUpstreamAddress(value string) bool {
+	if value == "" || strings.TrimSpace(value) != value {
+		return false
+	}
+
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || host != "127.0.0.1" {
+		return false
+	}
+
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return false
+	}
+
+	return net.JoinHostPort(
+		host,
+		strconv.Itoa(portNumber),
+	) == value
 }
 
 func failedDeployResult(
@@ -300,9 +347,10 @@ func reconciliationDeployResult(
 }
 
 // recordOperationWorkerDeployRuntimeResult stores the runtime instance
-// reference and marks the deployment ready only when readiness has been
-// verified. It also confirms that this worker still owns the operation
-// lease before committing the update.
+// reference and verified upstream address. It marks the deployment ready
+// only when both readiness and the loopback upstream have been verified.
+// It also confirms that this worker still owns the operation lease before
+// committing the update.
 func recordOperationWorkerDeployRuntimeResult(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -310,6 +358,7 @@ func recordOperationWorkerDeployRuntimeResult(
 	deployment operationWorkerDeployRecord,
 	artifact operationWorkerDeployArtifact,
 	runtimeInstanceReference string,
+	upstreamAddress string,
 	readinessVerified bool,
 ) error {
 	if ctx == nil {
@@ -329,6 +378,20 @@ func recordOperationWorkerDeployRuntimeResult(
 	) {
 		return errors.New(
 			"runtime instance reference is invalid",
+		)
+	}
+
+	if readinessVerified {
+		if !validOperationWorkerDeployUpstreamAddress(
+			upstreamAddress,
+		) {
+			return errors.New(
+				"verified deployment readiness requires a valid loopback upstream address",
+			)
+		}
+	} else if upstreamAddress != "" {
+		return errors.New(
+			"unverified deployment readiness cannot retain an upstream address",
 		)
 	}
 
@@ -468,6 +531,10 @@ func recordOperationWorkerDeployRuntimeResult(
 				ELSE 'deploying'
 			END,
 			runtime_instance_ref = $7,
+			upstream_address = CASE
+				WHEN $6::boolean THEN $8
+				ELSE NULL
+			END,
 			updated_at = now()
 		WHERE id = $1::uuid
 		  AND project_id = $2::uuid
@@ -485,6 +552,7 @@ func recordOperationWorkerDeployRuntimeResult(
 		operationID,
 		readinessVerified,
 		runtimeInstanceReference,
+		upstreamAddress,
 	).Scan(&updatedDeploymentID)
 
 	if errors.Is(err, pgx.ErrNoRows) {
