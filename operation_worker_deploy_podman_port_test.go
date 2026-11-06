@@ -31,6 +31,16 @@ func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
 	defer server.Close()
 
 	portOutput := strings.TrimPrefix(server.URL, "http://")
+	host, hostPort, err := net.SplitHostPort(portOutput)
+	if err != nil {
+		t.Fatalf("parse test server address: %v", err)
+	}
+
+	if host != "127.0.0.1" {
+		t.Fatalf("test server host = %q, want 127.0.0.1", host)
+	}
+
+	expectedUpstreamAddress := net.JoinHostPort(host, hostPort)
 
 	runtime, logPath := newOperationWorkerDeployPodmanPortTestRuntime(
 		t,
@@ -48,6 +58,18 @@ func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
 			"runtime reference = %q, want %q",
 			first.RuntimeInstanceReference,
 			operationWorkerDeployPodmanTestContainerID,
+		)
+	}
+
+	if !first.ReadinessVerified {
+		t.Fatal("first deployment did not report verified readiness")
+	}
+
+	if first.UpstreamAddress != expectedUpstreamAddress {
+		t.Fatalf(
+			"first deployment upstream = %q, want %q",
+			first.UpstreamAddress,
+			expectedUpstreamAddress,
 		)
 	}
 
@@ -87,6 +109,18 @@ func TestOperationWorkerDeployPodmanRuntimePublishesApplicationPortOnLoopback(
 			"retry reference = %q, first reference = %q",
 			second.RuntimeInstanceReference,
 			first.RuntimeInstanceReference,
+		)
+	}
+
+	if !second.ReadinessVerified {
+		t.Fatal("deployment retry did not report verified readiness")
+	}
+
+	if second.UpstreamAddress != expectedUpstreamAddress {
+		t.Fatalf(
+			"retry upstream = %q, want %q",
+			second.UpstreamAddress,
+			expectedUpstreamAddress,
 		)
 	}
 
