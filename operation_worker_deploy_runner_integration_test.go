@@ -222,6 +222,7 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 		persistedDeploymentID string
 		observedState         string
 		runtimeReference      string
+		upstreamAddress       string
 		persistedArtifactID   string
 	)
 
@@ -230,6 +231,7 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 			id::text,
 			observed_state,
 			COALESCE(runtime_instance_ref, ''),
+			COALESCE(upstream_address, ''),
 			artifact_id::text
 		FROM deployments
 		WHERE id = $1::uuid
@@ -245,6 +247,7 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 		&persistedDeploymentID,
 		&observedState,
 		&runtimeReference,
+		&upstreamAddress,
 		&persistedArtifactID,
 	)
 	if err != nil {
@@ -271,6 +274,14 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 			"runtime reference = %q, want %q",
 			runtimeReference,
 			runtime.result.RuntimeInstanceReference,
+		)
+	}
+
+	if upstreamAddress != runtime.result.UpstreamAddress {
+		t.Errorf(
+			"upstream address = %q, want %q",
+			upstreamAddress,
+			runtime.result.UpstreamAddress,
 		)
 	}
 
