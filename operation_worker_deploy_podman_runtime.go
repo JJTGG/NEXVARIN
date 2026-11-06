@@ -592,6 +592,7 @@ func (runtime operationWorkerDeployPodmanRuntime) readyResultForContainer(
 	}
 
 	// Readiness is asserted only after the loopback HTTP probe succeeds.
+	result.UpstreamAddress = net.JoinHostPort("127.0.0.1", hostPort)
 	result.ReadinessVerified = true
 
 	return result, nil
