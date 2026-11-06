@@ -15,6 +15,7 @@ func TestOperationWorkerDeployRunsThroughRunnerIntegration(
 	runtime := &operationWorkerDeployExecutorTestRuntime{
 		result: operationWorkerDeployRuntimeResult{
 			RuntimeInstanceReference: "test-worker-runtime-instance-001",
+			UpstreamAddress:          "127.0.0.1:32781",
 			ReadinessVerified:        true,
 		},
 	}
