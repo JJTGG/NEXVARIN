@@ -221,6 +221,144 @@ func TestOperationWorkerDeployPodmanRuntimeRejectsUnsafePortBindings(
 	}
 }
 
+func TestOperationWorkerDeployPodmanRuntimeRejectsChangesAfterReadinessProbe(
+	t *testing.T,
+) {
+	tests := []struct {
+		name                    string
+		mutation                string
+		postProbePortOutput     string
+		expectedPortInspections int
+	}{
+		{
+			name:                    "container stopped",
+			mutation:                "stopped",
+			expectedPortInspections: 1,
+		},
+		{
+			name:                    "container identity replaced",
+			mutation:                "replaced",
+			expectedPortInspections: 1,
+		},
+		{
+			name:                    "published host port remapped",
+			mutation:                "port-remapped",
+			postProbePortOutput:     "127.0.0.1:1",
+			expectedPortInspections: 2,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := newOperationWorkerDeployPodmanTestRequest(t)
+			request.ApplicationPort = 8080
+
+			var readinessProbeCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(
+				func(w http.ResponseWriter, _ *http.Request) {
+					readinessProbeCount.Add(1)
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte("nexvarin-ready\n"))
+				},
+			))
+			defer server.Close()
+
+			portOutput := strings.TrimPrefix(server.URL, "http://")
+			host, _, err := net.SplitHostPort(portOutput)
+			if err != nil {
+				t.Fatalf("parse test server address: %v", err)
+			}
+			if host != "127.0.0.1" {
+				t.Fatalf("test server host = %q, want 127.0.0.1", host)
+			}
+
+			runtime, logPath := newOperationWorkerDeployPodmanPortTestRuntime(
+				t,
+				request,
+				portOutput,
+			)
+
+			makePostProbeState := func(running bool, containerID string) string {
+				state := newOperationWorkerDeployPodmanTestContainer(
+					request,
+					running,
+				)
+				var containers []operationWorkerDeployPodmanContainer
+				if err := json.Unmarshal(state, &containers); err != nil {
+					t.Fatalf("decode post-probe container state: %v", err)
+				}
+				if len(containers) != 1 {
+					t.Fatalf(
+						"post-probe container count = %d, want 1",
+						len(containers),
+					)
+				}
+
+				containers[0].Config.Labels[operationWorkerDeployPodmanApplicationPortLabel] =
+					strconv.Itoa(request.ApplicationPort)
+				containers[0].ID = containerID
+
+				state, err := json.Marshal(containers)
+				if err != nil {
+					t.Fatalf("encode post-probe container state: %v", err)
+				}
+				return string(state)
+			}
+
+			switch test.mutation {
+			case "stopped":
+				t.Setenv(
+					"FAKE_PODMAN_POST_PROBE_STATE_JSON",
+					makePostProbeState(
+						false,
+						operationWorkerDeployPodmanTestContainerID,
+					),
+				)
+			case "replaced":
+				t.Setenv(
+					"FAKE_PODMAN_POST_PROBE_STATE_JSON",
+					makePostProbeState(
+						true,
+						"test-container-instance-replaced",
+					),
+				)
+			case "port-remapped":
+				t.Setenv(
+					"FAKE_PODMAN_POST_PROBE_PORT_OUTPUT",
+					test.postProbePortOutput,
+				)
+			default:
+				t.Fatalf("unsupported post-probe mutation %q", test.mutation)
+			}
+
+			_, err = runtime.Deploy(context.Background(), request)
+			if readinessProbeCount.Load() == 0 {
+				t.Fatal("deployment failed before the HTTP readiness probe ran")
+			}
+			if !errors.Is(err, errOperationWorkerDeployRuntimeOutcomeUnknown) {
+				t.Fatalf(
+					"Deploy() error = %v, want unknown runtime outcome",
+					err,
+				)
+			}
+
+			log := readOperationWorkerDeployPodmanTestLog(t, logPath)
+			portInspections := countOperationWorkerDeployPodmanTestCommands(
+				log,
+				"port ",
+			)
+			if portInspections != test.expectedPortInspections {
+				t.Fatalf(
+					"Podman port inspections = %d, want %d; commands:\n%s",
+					portInspections,
+					test.expectedPortInspections,
+					log,
+				)
+			}
+		})
+	}
+}
+
 func TestOperationWorkerDeployPodmanRuntimeRejectsUnhealthyHTTP(
 	t *testing.T,
 ) {
@@ -273,6 +411,8 @@ func newOperationWorkerDeployPodmanPortTestRuntime(
 	podmanPath := filepath.Join(root, "fake-podman")
 	statePath := filepath.Join(root, "container-state.json")
 	logPath := filepath.Join(root, "commands.log")
+	inspectCountPath := filepath.Join(root, "inspect-count")
+	portCountPath := filepath.Join(root, "port-count")
 
 	containerJSON := newOperationWorkerDeployPodmanTestContainer(
 		request,
@@ -296,18 +436,18 @@ func newOperationWorkerDeployPodmanPortTestRuntime(
 		t.Fatalf("encode fake container state: %v", err)
 	}
 
-	script := `#!/bin/sh
+	script := \`#!/bin/sh
 set -eu
 
-printf '%s\n' "$*" >> "$FAKE_PODMAN_LOG"
+printf '%s\\n' "$*" >> "$FAKE_PODMAN_LOG"
 
-case "${1-}" in
+case "\${1-}" in
   info)
-    printf '%s\n' "true"
+    printf '%s\\n' "true"
     exit 0
     ;;
   container)
-    case "${2-}" in
+    case "\${2-}" in
       exists)
         if [ -f "$FAKE_PODMAN_STATE" ]; then
           exit 0
@@ -316,6 +456,18 @@ case "${1-}" in
         ;;
       inspect)
         if [ -f "$FAKE_PODMAN_STATE" ]; then
+          inspect_count=0
+          if [ -f "$FAKE_PODMAN_INSPECT_COUNT_FILE" ]; then
+            inspect_count="$(cat "$FAKE_PODMAN_INSPECT_COUNT_FILE")"
+          fi
+          inspect_count=$((inspect_count + 1))
+          printf '%s' "$inspect_count" > "$FAKE_PODMAN_INSPECT_COUNT_FILE"
+
+          if [ "$inspect_count" -eq 2 ] &&
+            [ -n "\${FAKE_PODMAN_POST_PROBE_STATE_JSON:-}" ]; then
+            printf '%s' "$FAKE_PODMAN_POST_PROBE_STATE_JSON" > "$FAKE_PODMAN_STATE"
+          fi
+
           cat "$FAKE_PODMAN_STATE"
           exit 0
         fi
@@ -331,16 +483,29 @@ case "${1-}" in
     exit 0
     ;;
   port)
-    if [ "${3-}" != "$FAKE_PODMAN_APPLICATION_PORT_SPEC" ]; then
+    if [ "\${3-}" != "$FAKE_PODMAN_APPLICATION_PORT_SPEC" ]; then
       exit 125
     fi
-    printf '%s\n' "$FAKE_PODMAN_PORT_OUTPUT"
+
+    port_count=0
+    if [ -f "$FAKE_PODMAN_PORT_COUNT_FILE" ]; then
+      port_count="$(cat "$FAKE_PODMAN_PORT_COUNT_FILE")"
+    fi
+    port_count=$((port_count + 1))
+    printf '%s' "$port_count" > "$FAKE_PODMAN_PORT_COUNT_FILE"
+
+    if [ "$port_count" -eq 2 ] &&
+      [ -n "\${FAKE_PODMAN_POST_PROBE_PORT_OUTPUT:-}" ]; then
+      printf '%s\\n' "$FAKE_PODMAN_POST_PROBE_PORT_OUTPUT"
+    else
+      printf '%s\\n' "$FAKE_PODMAN_PORT_OUTPUT"
+    fi
     exit 0
     ;;
 esac
 
 exit 125
-`
+\`
 
 	if err := os.WriteFile(
 		podmanPath,
@@ -354,6 +519,10 @@ exit 125
 	t.Setenv("FAKE_PODMAN_LOG", logPath)
 	t.Setenv("FAKE_PODMAN_STATE_JSON", string(containerJSON))
 	t.Setenv("FAKE_PODMAN_PORT_OUTPUT", portOutput)
+	t.Setenv("FAKE_PODMAN_INSPECT_COUNT_FILE", inspectCountPath)
+	t.Setenv("FAKE_PODMAN_PORT_COUNT_FILE", portCountPath)
+	t.Setenv("FAKE_PODMAN_POST_PROBE_STATE_JSON", "")
+	t.Setenv("FAKE_PODMAN_POST_PROBE_PORT_OUTPUT", "")
 	t.Setenv(
 		"FAKE_PODMAN_APPLICATION_PORT_SPEC",
 		strconv.Itoa(request.ApplicationPort)+"/tcp",
