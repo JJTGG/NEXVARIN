@@ -591,7 +591,48 @@ func (runtime operationWorkerDeployPodmanRuntime) readyResultForContainer(
 			)
 	}
 
-	// Readiness is asserted only after the loopback HTTP probe succeeds.
+	// Reinspect after the HTTP probe. The container may have stopped or
+	// been replaced, and its published host binding may have changed
+	// while the probe was running.
+	confirmedContainer, exists, inspectErr := runtime.inspectContainer(
+		ctx,
+		name,
+	)
+	if inspectErr != nil || !exists {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"container state could not be reconfirmed after HTTP readiness",
+			)
+	}
+
+	if confirmedContainer.ID != container.ID ||
+		!runtime.containerMatches(confirmedContainer, request) ||
+		!confirmedContainer.State.Running {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"container identity or running state changed after HTTP readiness",
+			)
+	}
+
+	confirmedHostPort, err := runtime.publishedApplicationHostPort(
+		ctx,
+		name,
+		request.ApplicationPort,
+	)
+	if err != nil {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"published application port could not be reconfirmed: " + err.Error(),
+			)
+	}
+
+	if confirmedHostPort != hostPort {
+		return operationWorkerDeployRuntimeResult{},
+			unknownPodmanDeployOutcome(
+				"published application port changed after HTTP readiness",
+			)
+	}
+
 	result.UpstreamAddress = net.JoinHostPort("127.0.0.1", hostPort)
 	result.ReadinessVerified = true
 
