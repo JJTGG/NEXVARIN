@@ -46,9 +46,9 @@ type deploymentRouteRecord struct {
 }
 
 type createDeploymentRouteInput struct {
-	ProjectID    string
-	RepositoryID string
-	DeploymentID string
+	ProjectID     string
+	RepositoryID  string
+	DeploymentID  string
 	PreviewSuffix string
 }
 
