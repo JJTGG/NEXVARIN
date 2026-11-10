@@ -6,7 +6,7 @@ Decision: Host-managed Caddy with durable route reconciliation
 
 Revision: 0.1
 
-Date: 2026-11-06
+Date: 2026-11-10
 
 Status: Proposed
 
