@@ -23,8 +23,7 @@ SET LOCAL search_path = nexvarin_deployment_route_test, public;
 \ir ../migrations/000006_add_deployment_routes.sql
 
 
--- Fixtures: two projects, three repositories' worth of deployment scope,
--- verified artifact references, and three deployment records.
+-- Fixtures: two projects, two repositories, and three deployment records.
 
 INSERT INTO projects (
     id,
@@ -217,6 +216,8 @@ BEGIN
     END;
 
     -- A route cannot claim a deployment through another project/repository.
+    -- Deployment three belongs to project two and repository two. Supplying
+    -- project one and repository one must therefore fail the composite FK.
 
     BEGIN
         INSERT INTO deployment_routes (
@@ -226,9 +227,9 @@ BEGIN
             hostname
         )
         VALUES (
-            '10000000-0000-4000-8000-000000000002',
-            '20000000-0000-4000-8000-000000000002',
-            '50000000-0000-4000-8000-000000000001',
+            '10000000-0000-4000-8000-000000000001',
+            '20000000-0000-4000-8000-000000000001',
+            '50000000-0000-4000-8000-000000000003',
             'wrong-scope.preview.example'
         );
 
