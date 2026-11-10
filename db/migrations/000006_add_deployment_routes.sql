@@ -184,7 +184,7 @@ BEGIN
                 CONSTRAINT = 'deployment_routes_observed_generation_monotonic';
     END IF;
 
-    NEW.updated_at := clock_timestamp();l
+    NEW.updated_at := clock_timestamp();
 
     RETURN NEW;
 END;
