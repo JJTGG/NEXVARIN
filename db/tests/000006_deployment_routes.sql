@@ -478,7 +478,8 @@ BEGIN
             END IF;
     END;
 
-    -- A desired-state change advances the generation exactly once.
+    -- The route was deactivated at generation two. Reactivation advances
+    -- desired generation to three while the observed removal remains at two.
 
     SELECT desired_generation
     INTO actual_generation
@@ -487,12 +488,30 @@ BEGIN
 
     IF actual_generation <> 2 THEN
         RAISE EXCEPTION
-            'Desired-state change produced generation %, expected 2',
+            'Initial desired-state change produced generation %, expected 2',
             actual_generation;
     END IF;
 
     UPDATE deployment_routes
-    SET desired_state = 'inactive',
+    SET desired_state = 'active'
+    WHERE id = '60000000-0000-4000-8000-000000000001';
+
+    SELECT desired_generation
+    INTO actual_generation
+    FROM deployment_routes
+    WHERE id = '60000000-0000-4000-8000-000000000001';
+
+    IF actual_generation <> 3 THEN
+        RAISE EXCEPTION
+            'Route reactivation produced generation %, expected 3',
+            actual_generation;
+    END IF;
+
+    -- Updating other fields without changing desired state does not
+    -- advance the generation a second time.
+
+    UPDATE deployment_routes
+    SET desired_state = 'active',
         last_error_code = 'test_retry'
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
@@ -501,7 +520,7 @@ BEGIN
     FROM deployment_routes
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
-    IF actual_generation <> 2 THEN
+    IF actual_generation <> 3 THEN
         RAISE EXCEPTION
             'Unchanged desired state unexpectedly advanced generation';
     END IF;
@@ -510,7 +529,7 @@ BEGIN
 
     BEGIN
         UPDATE deployment_routes
-        SET desired_generation = 1
+        SET desired_generation = 2
         WHERE id = '60000000-0000-4000-8000-000000000001';
 
         RAISE EXCEPTION
@@ -527,15 +546,12 @@ BEGIN
     END;
 
     -- Observations can lag the desired generation, but cannot move backwards.
-
-    UPDATE deployment_routes
-    SET observed_state = 'active',
-        observed_generation = 1
-    WHERE id = '60000000-0000-4000-8000-000000000001';
+    -- The old removal remains confirmed at generation two while generation
+    -- three is awaiting reconciliation.
 
     BEGIN
         UPDATE deployment_routes
-        SET observed_generation = 0
+        SET observed_generation = 1
         WHERE id = '60000000-0000-4000-8000-000000000001';
 
         RAISE EXCEPTION
@@ -571,7 +587,7 @@ BEGIN
 
     BEGIN
         UPDATE deployment_routes
-        SET observed_generation = 3
+        SET observed_generation = 4
         WHERE id = '60000000-0000-4000-8000-000000000001';
 
         RAISE EXCEPTION
@@ -587,9 +603,11 @@ BEGIN
             END IF;
     END;
 
+    -- The route catches up to the current desired generation.
+
     UPDATE deployment_routes
-    SET observed_state = 'removed',
-        observed_generation = 2
+    SET observed_state = 'active',
+        observed_generation = 3
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
     -- Deployment eligibility changes must invalidate the route generation.
@@ -604,9 +622,9 @@ BEGIN
     FROM deployment_routes
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
-    IF actual_generation <> 3 THEN
+    IF actual_generation <> 4 THEN
         RAISE EXCEPTION
-            'Deployment readiness/upstream change produced generation %, expected 3',
+            'Deployment readiness/upstream change produced generation %, expected 4',
             actual_generation;
     END IF;
 
@@ -623,9 +641,9 @@ BEGIN
     FROM deployment_routes
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
-    IF actual_generation <> 5 THEN
+    IF actual_generation <> 6 THEN
         RAISE EXCEPTION
-            'Deployment deactivation/deletion produced generation %, expected 5',
+            'Deployment deactivation/deletion produced generation %, expected 6',
             actual_generation;
     END IF;
 
@@ -640,7 +658,7 @@ BEGIN
     FROM deployment_routes
     WHERE id = '60000000-0000-4000-8000-000000000001';
 
-    IF actual_generation <> 5 THEN
+    IF actual_generation <> 6 THEN
         RAISE EXCEPTION
             'An unrelated deployment update advanced route generation';
     END IF;
