@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -261,6 +262,8 @@ func createDeploymentRoute(
 		hostname,
 	))
 
+	replayed := false
+
 	if errors.Is(err, pgx.ErrNoRows) {
 		// A concurrent request may have created this deployment's route
 		// after the initial lookup. Recover the existing immutable record.
@@ -283,6 +286,10 @@ func createDeploymentRoute(
 				"deployment route creation conflicted but the existing route could not be recovered",
 			)
 		}
+
+		if err == nil {
+			replayed = true
+		}
 	}
 
 	if err != nil {
@@ -302,7 +309,7 @@ func createDeploymentRoute(
 
 	return createDeploymentRouteResult{
 		Route:    record,
-		Replayed: false,
+		Replayed: replayed,
 	}, nil
 }
 
