@@ -124,6 +124,29 @@ func (f *deploymentRouteReconcileIntegrationFixture) prepareDeploymentReady(
 	return nil
 }
 
+func (f *deploymentRouteReconcileIntegrationFixture) loadPreviewAddress(
+	ctx context.Context,
+	deploymentID string,
+) (string, error) {
+	var address string
+	err := f.pool.QueryRow(ctx, `
+		SELECT COALESCE(preview_address, '')
+		FROM deployments
+		WHERE id = $1::uuid
+		  AND project_id = $2::uuid
+		  AND repository_id = $3::uuid
+	`,
+		deploymentID,
+		f.projectID,
+		f.repositoryID,
+	).Scan(&address)
+	if err != nil {
+		return "", fmt.Errorf("load deployment preview address: %w", err)
+	}
+
+	return address, nil
+}
+
 func TestClaimDeploymentRoutesIntegrationClaimsDueRouteAndExcludesActiveLease(
 	t *testing.T,
 ) {
@@ -472,6 +495,14 @@ func TestRecordDeploymentRouteReconciliationSuccessIntegrationCompletesGeneratio
 		t.Error("successful reconciliation did not record last_reconciled_at")
 	}
 
+	previewAddress, err := fixture.loadPreviewAddress(ctx, fixture.deploymentID)
+	if err != nil {
+		t.Fatalf("load deployment preview address: %v", err)
+	}
+	if previewAddress != claims[0].Route.Hostname {
+		t.Errorf("deployment preview address = %q, want hostname %q", previewAddress, claims[0].Route.Hostname)
+	}
+
 	remaining, err := claimDeploymentRoutes(
 		ctx,
 		fixture.pool,
@@ -484,6 +515,268 @@ func TestRecordDeploymentRouteReconciliationSuccessIntegrationCompletesGeneratio
 	}
 	if len(remaining) != 0 {
 		t.Errorf("completed route was claimed again %d times", len(remaining))
+	}
+}
+
+func TestRecordDeploymentRouteReconciliationSuccessIntegrationKeepsIneligibleActivationDue(
+	t *testing.T,
+) {
+	fixture := newDeploymentRouteReconcileIntegrationFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := fixture.createRoute(ctx, "preview.example.test"); err != nil {
+		t.Fatalf("create deployment route: %v", err)
+	}
+
+	claims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-a",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim deployment route: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("claimed route count = %d, want 1", len(claims))
+	}
+
+	record, err := recordDeploymentRouteReconciliationSuccess(
+		ctx,
+		fixture.pool,
+		claims[0],
+		"active",
+	)
+	if err != nil {
+		t.Fatalf("record active observation for ineligible deployment: %v", err)
+	}
+	if record.ObservedState != "needs_reconciliation" {
+		t.Errorf("observed state = %q, want needs_reconciliation", record.ObservedState)
+	}
+	if record.LastErrorCode == nil || *record.LastErrorCode != "route_activation_ineligible" {
+		t.Errorf("last error code = %v, want route_activation_ineligible", record.LastErrorCode)
+	}
+	if record.ObservedGeneration == nil ||
+		*record.ObservedGeneration != claims[0].Route.DesiredGeneration {
+		t.Errorf("observed generation = %v, want claimed generation %d", record.ObservedGeneration, claims[0].Route.DesiredGeneration)
+	}
+
+	previewAddress, err := fixture.loadPreviewAddress(ctx, fixture.deploymentID)
+	if err != nil {
+		t.Fatalf("load deployment preview address: %v", err)
+	}
+	if previewAddress != "" {
+		t.Errorf("ineligible deployment preview address = %q, want empty", previewAddress)
+	}
+
+	nextClaims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-b",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim route after ineligible activation observation: %v", err)
+	}
+	if len(nextClaims) != 1 {
+		t.Fatalf("ineligible route due claim count = %d, want 1", len(nextClaims))
+	}
+	if nextClaims[0].Route.ID != claims[0].Route.ID {
+		t.Errorf("due route ID = %q, want %q", nextClaims[0].Route.ID, claims[0].Route.ID)
+	}
+}
+
+func TestRecordDeploymentRouteReconciliationSuccessIntegrationKeepsMissingEligibleRouteDue(
+	t *testing.T,
+) {
+	fixture := newDeploymentRouteReconcileIntegrationFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := fixture.prepareDeploymentReady(ctx, fixture.deploymentID); err != nil {
+		t.Fatalf("prepare deployment for route reconciliation: %v", err)
+	}
+	if _, err := fixture.createRoute(ctx, "preview.example.test"); err != nil {
+		t.Fatalf("create deployment route: %v", err)
+	}
+
+	claims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-a",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim deployment route: %v", err)
+	}
+	if len(claims) != 1 {
+		t.Fatalf("claimed route count = %d, want 1", len(claims))
+	}
+
+	record, err := recordDeploymentRouteReconciliationSuccess(
+		ctx,
+		fixture.pool,
+		claims[0],
+		"removed",
+	)
+	if err != nil {
+		t.Fatalf("record missing active route observation: %v", err)
+	}
+	if record.ObservedState != "needs_reconciliation" {
+		t.Errorf("observed state = %q, want needs_reconciliation", record.ObservedState)
+	}
+	if record.LastErrorCode == nil || *record.LastErrorCode != "route_missing" {
+		t.Errorf("last error code = %v, want route_missing", record.LastErrorCode)
+	}
+	if record.ObservedGeneration == nil ||
+		*record.ObservedGeneration != claims[0].Route.DesiredGeneration {
+		t.Errorf("observed generation = %v, want claimed generation %d", record.ObservedGeneration, claims[0].Route.DesiredGeneration)
+	}
+
+	previewAddress, err := fixture.loadPreviewAddress(ctx, fixture.deploymentID)
+	if err != nil {
+		t.Fatalf("load deployment preview address: %v", err)
+	}
+	if previewAddress != "" {
+		t.Errorf("missing route preview address = %q, want empty", previewAddress)
+	}
+
+	nextClaims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-b",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim missing eligible route: %v", err)
+	}
+	if len(nextClaims) != 1 {
+		t.Fatalf("missing eligible route due claim count = %d, want 1", len(nextClaims))
+	}
+	if nextClaims[0].Route.ID != claims[0].Route.ID {
+		t.Errorf("due route ID = %q, want %q", nextClaims[0].Route.ID, claims[0].Route.ID)
+	}
+}
+
+func TestRecordDeploymentRouteReconciliationSuccessIntegrationClearsPreviewAfterRemoval(
+	t *testing.T,
+) {
+	fixture := newDeploymentRouteReconcileIntegrationFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if err := fixture.prepareDeploymentReady(ctx, fixture.deploymentID); err != nil {
+		t.Fatalf("prepare deployment for route activation: %v", err)
+	}
+	if _, err := fixture.createRoute(ctx, "preview.example.test"); err != nil {
+		t.Fatalf("create deployment route: %v", err)
+	}
+
+	initialClaims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-a",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim deployment route for activation: %v", err)
+	}
+	if len(initialClaims) != 1 {
+		t.Fatalf("initial claimed route count = %d, want 1", len(initialClaims))
+	}
+
+	activeRecord, err := recordDeploymentRouteReconciliationSuccess(
+		ctx,
+		fixture.pool,
+		initialClaims[0],
+		"active",
+	)
+	if err != nil {
+		t.Fatalf("record active route before removal: %v", err)
+	}
+	if activeRecord.ObservedState != "active" {
+		t.Fatalf("active observation state = %q, want active", activeRecord.ObservedState)
+	}
+
+	previewAddress, err := fixture.loadPreviewAddress(ctx, fixture.deploymentID)
+	if err != nil {
+		t.Fatalf("load active deployment preview address: %v", err)
+	}
+	if previewAddress != initialClaims[0].Route.Hostname {
+		t.Fatalf("active preview address = %q, want %q", previewAddress, initialClaims[0].Route.Hostname)
+	}
+
+	if _, err := fixture.pool.Exec(ctx, `
+		UPDATE deployment_routes
+		SET desired_state = 'inactive'
+		WHERE id = $1::uuid
+	`, initialClaims[0].Route.ID); err != nil {
+		t.Fatalf("mark deployment route inactive: %v", err)
+	}
+
+	removalClaims, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-b",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("claim inactive deployment route: %v", err)
+	}
+	if len(removalClaims) != 1 {
+		t.Fatalf("removal claimed route count = %d, want 1", len(removalClaims))
+	}
+	if removalClaims[0].Route.DesiredState != "inactive" {
+		t.Errorf("claimed route desired state = %q, want inactive", removalClaims[0].Route.DesiredState)
+	}
+
+	removedRecord, err := recordDeploymentRouteReconciliationSuccess(
+		ctx,
+		fixture.pool,
+		removalClaims[0],
+		"removed",
+	)
+	if err != nil {
+		t.Fatalf("record confirmed route removal: %v", err)
+	}
+	if removedRecord.ObservedState != "removed" {
+		t.Errorf("removed observation state = %q, want removed", removedRecord.ObservedState)
+	}
+	if removedRecord.ObservedGeneration == nil ||
+		*removedRecord.ObservedGeneration != removalClaims[0].Route.DesiredGeneration {
+		t.Errorf("removed observed generation = %v, want %d", removedRecord.ObservedGeneration, removalClaims[0].Route.DesiredGeneration)
+	}
+
+	previewAddress, err = fixture.loadPreviewAddress(ctx, fixture.deploymentID)
+	if err != nil {
+		t.Fatalf("load preview address after removal: %v", err)
+	}
+	if previewAddress != "" {
+		t.Errorf("preview address after confirmed removal = %q, want empty", previewAddress)
+	}
+
+	remaining, err := claimDeploymentRoutes(
+		ctx,
+		fixture.pool,
+		"route-controller-c",
+		1,
+		time.Minute,
+	)
+	if err != nil {
+		t.Fatalf("check removed route is no longer due: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("converged removed route was claimed again %d times", len(remaining))
 	}
 }
 
