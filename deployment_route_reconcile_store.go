@@ -35,8 +35,20 @@ type claimedDeploymentRoute struct {
 }
 
 type deploymentRouteLeaseState struct {
+	ProjectID          string
+	RepositoryID       string
+	DeploymentID       string
+	Hostname           string
+	DesiredState       string
 	DesiredGeneration  int64
 	ObservedGeneration pgtype.Int8
+}
+
+type deploymentRouteDeploymentState struct {
+	DesiredState    string
+	ObservedState   string
+	DeletedAt       pgtype.Timestamptz
+	UpstreamAddress pgtype.Text
 }
 
 const deploymentRouteClaimColumns = `
@@ -253,9 +265,18 @@ func renewDeploymentRouteLease(
 }
 
 // recordDeploymentRouteReconciliationSuccess records a confirmed external
-// observation for the generation captured by the original claim. If the
-// desired generation advanced while reconciliation was running, this records
-// the older observation without marking the newer generation as reconciled.
+// observation for the generation captured by the original claim. It only
+// marks a route converged when the current desired generation and deployment
+// eligibility still permit the observed state. A successful active result
+// also projects the hostname to deployments.preview_address in the same
+// transaction; that field intentionally stores a hostname, not a URL.
+//
+// Callers must only report active after Caddy read-back confirms the exact
+// owned hostname and upstream, and removed after read-back confirms absence.
+//
+// The deployment row is locked before the route row. Deployment triggers
+// update deployment_routes after taking the deployment lock, so this order
+// prevents a lock-order inversion with concurrent deployment updates.
 func recordDeploymentRouteReconciliationSuccess(
 	ctx context.Context,
 	pool *pgxpool.Pool,
@@ -301,6 +322,13 @@ func recordDeploymentRouteReconciliationSuccess(
 		_ = tx.Rollback(context.Background())
 	}()
 
+	// Keep this lock order aligned with deployment update triggers:
+	// deployments first, then deployment_routes.
+	deploymentState, err := lockDeploymentRouteDeployment(ctx, tx, claim)
+	if err != nil {
+		return deploymentRouteRecord{}, err
+	}
+
 	leaseState, err := lockDeploymentRouteLease(
 		ctx,
 		tx,
@@ -309,6 +337,15 @@ func recordDeploymentRouteReconciliationSuccess(
 	)
 	if err != nil {
 		return deploymentRouteRecord{}, err
+	}
+
+	if leaseState.ProjectID != claim.Route.ProjectID ||
+		leaseState.RepositoryID != claim.Route.RepositoryID ||
+		leaseState.DeploymentID != claim.Route.DeploymentID ||
+		leaseState.Hostname != claim.Route.Hostname {
+		return deploymentRouteRecord{}, errors.New(
+			"claimed deployment route identity does not match the stored route",
+		)
 	}
 	if claimedGeneration > leaseState.DesiredGeneration {
 		return deploymentRouteRecord{}, errors.New(
@@ -322,15 +359,82 @@ func recordDeploymentRouteReconciliationSuccess(
 		)
 	}
 
+	deploymentEligible := deploymentState.DesiredState == "active" &&
+		deploymentState.ObservedState == "ready" &&
+		!deploymentState.DeletedAt.Valid &&
+		deploymentState.UpstreamAddress.Valid &&
+		validOperationWorkerDeployUpstreamAddress(
+			deploymentState.UpstreamAddress.String,
+		)
+	claimSnapshotEligible := claim.Deployment.DesiredState == "active" &&
+		claim.Deployment.ObservedState == "ready" &&
+		claim.Deployment.DeletedAt == nil &&
+		claim.Deployment.UpstreamAddress != nil
+
+	staleGeneration := claimedGeneration != leaseState.DesiredGeneration
+	nextObservedState := "needs_reconciliation"
+	nextErrorCode := ""
+	resetAttempts := false
+	reconcileImmediately := true
+	var previewAddress any
+
+	switch observedState {
+	case "active":
+		switch {
+		case staleGeneration:
+			// Preserve the actual external observation, but leave the newer
+			// desired generation due for another controller pass.
+			nextObservedState = "active"
+			nextErrorCode = "stale_generation"
+		case leaseState.DesiredState != "active" || !deploymentEligible:
+			nextErrorCode = "route_activation_ineligible"
+		case !claimSnapshotEligible:
+			nextErrorCode = "route_activation_ineligible"
+		case *claim.Deployment.UpstreamAddress != deploymentState.UpstreamAddress.String:
+			nextErrorCode = "upstream_changed"
+		default:
+			nextObservedState = "active"
+			resetAttempts = true
+			reconcileImmediately = false
+			// preview_address is a canonical hostname only. The public URL
+			// scheme remains a separate ingress/product contract decision.
+			previewAddress = leaseState.Hostname
+		}
+
+	case "removed":
+		switch {
+		case staleGeneration:
+			// The removal is factual for the claimed generation, not proof
+			// that the newer desired generation has converged.
+			nextObservedState = "removed"
+			nextErrorCode = "stale_generation"
+		case leaseState.DesiredState == "inactive" || !deploymentEligible:
+			nextObservedState = "removed"
+			resetAttempts = true
+			reconcileImmediately = false
+		default:
+			// A desired, eligible deployment must have an active route.
+			// Absence is therefore drift, not successful convergence.
+			nextErrorCode = "route_missing"
+		}
+	}
+
 	record, err := scanDeploymentRouteRecord(tx.QueryRow(ctx, `
 		UPDATE deployment_routes
 		SET
 			observed_state = $3,
 			observed_generation = $4,
-			reconcile_attempt_count = 0,
+			reconcile_attempt_count = CASE
+				WHEN $5::boolean THEN 0
+				ELSE reconcile_attempt_count
+			END,
+			next_reconcile_at = CASE
+				WHEN $6::boolean THEN clock_timestamp()
+				ELSE next_reconcile_at
+			END,
 			lease_owner = NULL,
 			lease_expires_at = NULL,
-			last_error_code = NULL,
+			last_error_code = $7,
 			last_reconciled_at = clock_timestamp()
 		WHERE id = $1::uuid
 		  AND lease_owner = $2
@@ -338,8 +442,11 @@ func recordDeploymentRouteReconciliationSuccess(
 		RETURNING `+deploymentRouteRecordColumns,
 		routeUUID,
 		claim.LeaseOwner,
-		observedState,
+		nextObservedState,
 		claimedGeneration,
+		resetAttempts,
+		reconcileImmediately,
+		nullIfEmpty(nextErrorCode),
 	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deploymentRouteRecord{}, errDeploymentRouteLeaseNotOwned
@@ -348,6 +455,41 @@ func recordDeploymentRouteReconciliationSuccess(
 		return deploymentRouteRecord{}, fmt.Errorf(
 			"record deployment route observation: %w",
 			err,
+		)
+	}
+
+	// Keep the public projection atomic with the route observation. Any
+	// observation that is stale, ineligible, missing, or removed clears it.
+	var projectedDeploymentID string
+	err = tx.QueryRow(ctx, `
+		UPDATE deployments
+		SET
+			preview_address = $4,
+			updated_at = clock_timestamp()
+		WHERE id = $1::uuid
+		  AND project_id = $2::uuid
+		  AND repository_id = $3::uuid
+		RETURNING id::text
+	`,
+		leaseState.DeploymentID,
+		leaseState.ProjectID,
+		leaseState.RepositoryID,
+		previewAddress,
+	).Scan(&projectedDeploymentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return deploymentRouteRecord{}, errors.New(
+			"deployment disappeared while projecting its confirmed route",
+		)
+	}
+	if err != nil {
+		return deploymentRouteRecord{}, fmt.Errorf(
+			"project confirmed deployment route address: %w",
+			err,
+		)
+	}
+	if projectedDeploymentID != leaseState.DeploymentID {
+		return deploymentRouteRecord{}, errors.New(
+			"projected deployment ID does not match the locked deployment",
 		)
 	}
 
@@ -360,6 +502,13 @@ func recordDeploymentRouteReconciliationSuccess(
 	}
 
 	return record, nil
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // retryDeploymentRouteReconciliation records a failed attempt, releases the
@@ -480,6 +629,68 @@ func retryDeploymentRouteReconciliation(
 	return nextReconcileAt, nil
 }
 
+func lockDeploymentRouteDeployment(
+	ctx context.Context,
+	tx pgx.Tx,
+	claim claimedDeploymentRoute,
+) (deploymentRouteDeploymentState, error) {
+	var state deploymentRouteDeploymentState
+
+	projectID, err := normalizeOperationUUID(claim.Route.ProjectID)
+	if err != nil {
+		return deploymentRouteDeploymentState{}, errors.New(
+			"claimed deployment project ID is invalid",
+		)
+	}
+	repositoryID, err := normalizeOperationUUID(claim.Route.RepositoryID)
+	if err != nil {
+		return deploymentRouteDeploymentState{}, errors.New(
+			"claimed deployment repository ID is invalid",
+		)
+	}
+	deploymentID, err := normalizeOperationUUID(claim.Route.DeploymentID)
+	if err != nil {
+		return deploymentRouteDeploymentState{}, errors.New(
+			"claimed deployment ID is invalid",
+		)
+	}
+
+	err = tx.QueryRow(ctx, `
+		SELECT
+			desired_state,
+			observed_state,
+			deleted_at,
+			upstream_address
+		FROM deployments
+		WHERE id = $1::uuid
+		  AND project_id = $2::uuid
+		  AND repository_id = $3::uuid
+		FOR UPDATE
+	`,
+		deploymentID,
+		projectID,
+		repositoryID,
+	).Scan(
+		&state.DesiredState,
+		&state.ObservedState,
+		&state.DeletedAt,
+		&state.UpstreamAddress,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return deploymentRouteDeploymentState{}, errors.New(
+			"deployment associated with the claimed route was not found",
+		)
+	}
+	if err != nil {
+		return deploymentRouteDeploymentState{}, fmt.Errorf(
+			"lock deployment for route reconciliation: %w",
+			err,
+		)
+	}
+
+	return state, nil
+}
+
 func lockDeploymentRouteLease(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -494,6 +705,11 @@ func lockDeploymentRouteLease(
 
 	err := tx.QueryRow(ctx, `
 		SELECT
+			project_id::text,
+			repository_id::text,
+			deployment_id::text,
+			hostname,
+			desired_state,
 			desired_generation,
 			observed_generation,
 			lease_owner,
@@ -502,6 +718,11 @@ func lockDeploymentRouteLease(
 		WHERE id = $1::uuid
 		FOR UPDATE
 	`, routeUUID).Scan(
+		&state.ProjectID,
+		&state.RepositoryID,
+		&state.DeploymentID,
+		&state.Hostname,
+		&state.DesiredState,
 		&state.DesiredGeneration,
 		&state.ObservedGeneration,
 		&storedLeaseOwner,
