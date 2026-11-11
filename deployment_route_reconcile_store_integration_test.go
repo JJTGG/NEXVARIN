@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -60,6 +61,67 @@ func (f *deploymentRouteReconcileIntegrationFixture) createAdditionalDeployment(
 	}
 
 	return deploymentID, nil
+}
+
+func (f *deploymentRouteReconcileIntegrationFixture) prepareDeploymentReady(
+	ctx context.Context,
+	deploymentID string,
+) error {
+	build, err := f.create(
+		"route-artifact-"+deploymentID,
+		buildOperationRequestForTest(strings.Repeat("a", 40)),
+	)
+	if err != nil {
+		return fmt.Errorf("create build operation for ready deployment: %w", err)
+	}
+
+	var artifactID string
+	err = f.pool.QueryRow(ctx, `
+		INSERT INTO artifacts (
+			project_id,
+			repository_id,
+			build_operation_id,
+			source_revision,
+			artifact_reference,
+			content_digest,
+			verification_status,
+			verified_at
+		)
+		VALUES (
+			$1::uuid,
+			$2::uuid,
+			$3::uuid,
+			$4,
+			$5,
+			$6,
+			'verified',
+			clock_timestamp()
+		)
+		RETURNING id::text
+	`,
+		f.projectID,
+		f.repositoryID,
+		build.Operation.ID,
+		strings.Repeat("a", 40),
+		"registry.example.test/nexvarin/integration:ready",
+		"sha256:"+strings.Repeat("b", 64),
+	).Scan(&artifactID)
+	if err != nil {
+		return fmt.Errorf("create verified artifact for ready deployment: %w", err)
+	}
+
+	if _, err := f.pool.Exec(ctx, `
+		UPDATE deployments
+		SET
+			artifact_id = $2::uuid,
+			observed_state = 'ready',
+			upstream_address = '127.0.0.1:31001'
+		WHERE id = $1::uuid
+	`, deploymentID, artifactID); err != nil {
+		return fmt.Errorf("mark deployment ready with verified upstream: %w", err)
+	}
+
+	return nil
 }
 
 func TestClaimDeploymentRoutesIntegrationClaimsDueRouteAndExcludesActiveLease(
@@ -358,6 +420,10 @@ func TestRecordDeploymentRouteReconciliationSuccessIntegrationCompletesGeneratio
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+
+	if err := fixture.prepareDeploymentReady(ctx, fixture.deploymentID); err != nil {
+		t.Fatalf("prepare deployment for route activation: %v", err)
+	}
 
 	if _, err := fixture.createRoute(ctx, "preview.example.test"); err != nil {
 		t.Fatalf("create deployment route: %v", err)
