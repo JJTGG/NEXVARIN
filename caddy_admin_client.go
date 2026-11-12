@@ -68,9 +68,6 @@ type caddyAdminResponse struct {
 	Body       []byte
 }
 
-// newCaddyAdminClient creates an HTTP client that can communicate only with
-// the configured Caddy Unix-domain socket. It does not probe or fall back to
-// a TCP administration endpoint.
 func newCaddyAdminClient(
 	config caddyAdminClientConfig,
 ) (*caddyAdminClient, error) {
@@ -114,7 +111,6 @@ func newCaddyAdminClient(
 	}
 
 	transport := &http.Transport{
-		// A nil Proxy disables HTTP_PROXY, HTTPS_PROXY, and ALL_PROXY.
 		Proxy: nil,
 		DialContext: func(
 			ctx context.Context,
@@ -217,21 +213,23 @@ func (client *caddyAdminClient) do(
 		request.Header.Set("Content-Type", "application/json")
 	}
 	if ifMatch != "" {
-		// Preserve the Caddy ETag byte-for-byte. Do not trim or reconstruct it.
+		// Preserve the Caddy ETag byte-for-byte.
 		request.Header.Set("If-Match", ifMatch)
 	}
 
 	httpResponse, err := client.httpClient.Do(request)
 	if err != nil {
-		if ctx.Err() != nil {
-			return caddyAdminResponse{}, ctx.Err()
-		}
+		// Even context cancellation cannot prove that an issued mutation
+		// did not reach Caddy or that Caddy did not apply it.
 		if isCaddyAdminMutation(method) {
 			return caddyAdminResponse{}, fmt.Errorf(
 				"%w: %v",
 				errCaddyAdminOutcomeUnknown,
 				err,
 			)
+		}
+		if ctx.Err() != nil {
+			return caddyAdminResponse{}, ctx.Err()
 		}
 		return caddyAdminResponse{}, fmt.Errorf(
 			"%w: %v",
@@ -256,8 +254,7 @@ func (client *caddyAdminClient) do(
 		return response, readErr
 	}
 
-	// Do not follow redirects. A 304 is not a redirect and is returned
-	// to the caller as an ordinary HTTP response for explicit handling.
+	// A 304 is not a redirect. Other 3xx responses are never followed.
 	if httpResponse.StatusCode >= http.StatusMultipleChoices &&
 		httpResponse.StatusCode < 400 &&
 		httpResponse.StatusCode != http.StatusNotModified {
@@ -265,8 +262,7 @@ func (client *caddyAdminClient) do(
 	}
 
 	// A server error does not prove that a mutation was not applied.
-	// Preserve the response for inspection, but require read-back before
-	// the controller decides whether another mutation is necessary.
+	// Preserve the response but require read-back before recovery.
 	if isCaddyAdminMutation(method) &&
 		httpResponse.StatusCode >= http.StatusInternalServerError {
 		return response, fmt.Errorf(
@@ -290,7 +286,7 @@ func (client *caddyAdminClient) readResponse(
 	etagValues := httpResponse.Header.Values("ETag")
 	switch len(etagValues) {
 	case 0:
-		// The caller decides whether an ETag is mandatory for this operation.
+		// The caller decides whether an ETag is mandatory.
 	case 1:
 		response.ETag = etagValues[0]
 	default:
