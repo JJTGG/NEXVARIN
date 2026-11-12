@@ -243,6 +243,84 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.10.1
+
+      - name: Download and verify pinned Caddy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="2.11.9"
+          asset="caddy_${version}_linux_amd64.tar.gz"
+          base_url="https://github.com/caddyserver/caddy/releases/download/v${version}"
+          work_dir="${RUNNER_TEMP}/caddy-${version}"
+
+          mkdir -p "$work_dir"
+          cd "$work_dir"
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            --silent --show-error \
+            "${base_url}/caddy_${version}_checksums.txt" \
+            --output checksums.txt
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            --silent --show-error \
+            "${base_url}/caddy_${version}_checksums.txt.pem" \
+            --output checksums.txt.pem
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            --silent --show-error \
+            "${base_url}/caddy_${version}_checksums.txt.sig" \
+            --output checksums.txt.sig
+
+          COSIGN_EXPERIMENTAL=1 cosign verify-blob \
+            --certificate checksums.txt.pem \
+            --signature checksums.txt.sig \
+            --certificate-identity "https://github.com/caddyserver/caddy/.github/workflows/release.yml@refs/tags/v${version}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            checksums.txt
+
+          checksum_line="$(awk -v target="$asset" '
+            {
+              filename = $2
+              sub(/^\*/, "", filename)
+              if (filename == target) {
+                print
+                matches++
+              }
+            }
+            END {
+              if (matches != 1) {
+                exit 1
+              }
+            }
+          ' checksums.txt)"
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            --silent --show-error \
+            "${base_url}/${asset}" \
+            --output "$asset"
+
+          printf '%s\n' "$checksum_line" | sha256sum --check --strict -
+
+          tar -xzf "$asset" -C "$work_dir"
+
+          test -x "$work_dir/caddy"
+
+          version_output="$("$work_dir/caddy" version)"
+          printf 'Verified Caddy binary: %s\n' "$version_output"
+
+          case "$version_output" in
+            "v${version}"*) ;;
+            *)
+              echo "The downloaded Caddy binary has an unexpected version."
+              exit 1
+              ;;
+          esac
+
+          echo "CADDY_TEST_BINARY=$work_dir/caddy" >> "$GITHUB_ENV"
+
       - name: Run tests, including live rootless Podman integration
         env:
           TEST_DATABASE_URL: postgresql://nexvarin_test:nexvarin_test@127.0.0.1:5432/nexvarin_test?sslmode=disable
