@@ -25,7 +25,7 @@ const (
 
 	caddyAdminIntegrationOperatorRouteID = "operator-owned-route"
 
-	caddyAdminIntegrationRouteID = "nexvarin-route-00000000-0000-4000-8000-000000000001"
+	caddyAdminIntegrationRouteID  = "nexvarin-route-00000000-0000-4000-8000-000000000001"
 	caddyAdminIntegrationHostname = "app.preview.example.test"
 )
 
@@ -408,7 +408,7 @@ func caddyAdminIntegrationNamespaceRoutes(
 	t.Helper()
 
 	var (
-		namespaceCount int
+		namespaceCount  int
 		namespaceRoutes []any
 	)
 
