@@ -182,6 +182,9 @@ func caddyAdminIntegrationConfig(
 			"http": map[string]any{
 				"servers": map[string]any{
 					"nexvarin": map[string]any{
+						"automatic_https": map[string]any{
+							"disable": true,
+						},
 						"listen": []string{
 							"127.0.0.1:0",
 						},
