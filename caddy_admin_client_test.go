@@ -538,16 +538,18 @@ func TestCaddyAdminClientClassifiesCancelledMutationAsUnknown(
 ) {
 	var requestCount atomic.Int32
 	receivedRequest := make(chan struct{}, 1)
+	releaseHandler := make(chan struct{})
+	defer close(releaseHandler)
 
 	client := newCaddyAdminTestClient(
 		t,
 		http.HandlerFunc(func(
 			_ http.ResponseWriter,
-			request *http.Request,
+			_ *http.Request,
 		) {
 			requestCount.Add(1)
 			receivedRequest <- struct{}{}
-			<-request.Context().Done()
+			<-releaseHandler
 		}),
 		caddyAdminClientConfig{},
 	)
@@ -606,16 +608,18 @@ func TestCaddyAdminClientClassifiesMutationTimeoutAsUnknown(
 ) {
 	var requestCount atomic.Int32
 	receivedRequest := make(chan struct{}, 1)
+	releaseHandler := make(chan struct{})
+	defer close(releaseHandler)
 
 	client := newCaddyAdminTestClient(
 		t,
 		http.HandlerFunc(func(
 			_ http.ResponseWriter,
-			request *http.Request,
+			_ *http.Request,
 		) {
 			requestCount.Add(1)
 			receivedRequest <- struct{}{}
-			<-request.Context().Done()
+			<-releaseHandler
 		}),
 		caddyAdminClientConfig{
 			RequestTimeout: 500 * time.Millisecond,
@@ -865,11 +869,7 @@ func TestNewCaddyAdminClientRejectsInvalidConfiguration(
 		{
 			name: "unclean socket path",
 			config: caddyAdminClientConfig{
-				SocketPath: filepath.Join(
-					t.TempDir(),
-					"..",
-					"caddy-admin.sock",
-				),
+				SocketPath: validSocketPath + "/../caddy-admin.sock",
 			},
 		},
 		{
