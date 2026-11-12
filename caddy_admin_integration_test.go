@@ -116,8 +116,6 @@ func startCaddyAdminIntegration(
 		"run",
 		"--config",
 		configPath,
-		"--adapter",
-		"json",
 	)
 	command.Env = caddyAdminIntegrationEnvironment(tempDirectory)
 
