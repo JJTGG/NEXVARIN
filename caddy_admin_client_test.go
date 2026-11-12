@@ -847,7 +847,7 @@ func TestNewCaddyAdminClientRejectsInvalidConfiguration(
 		config caddyAdminClientConfig
 	}{
 		{
-			name: "empty socket path",
+			name:   "empty socket path",
 			config: caddyAdminClientConfig{},
 		},
 		{
