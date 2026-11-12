@@ -283,10 +283,18 @@ jobs:
 
           checksum_line="$(awk -v target="$asset" '
             {
-              filename = $2
+              hash = $1
+
+              if (length(hash) != 128 || hash !~ /^[[:xdigit:]]+$/) {
+                next
+              }
+
+              filename = $NF
               sub(/^\*/, "", filename)
+              sub(/^.*\//, "", filename)
+
               if (filename == target) {
-                print
+                print hash "  " target
                 matches++
               }
             }
@@ -297,12 +305,17 @@ jobs:
             }
           ' checksums.txt)"
 
+          if [ -z "$checksum_line" ]; then
+            echo "The signed manifest has no unique SHA-512 entry for ${asset}."
+            exit 1
+          fi
+
           curl --fail --location --retry 3 --retry-all-errors \
             --silent --show-error \
             "${base_url}/${asset}" \
             --output "$asset"
 
-          printf '%s\n' "$checksum_line" | sha256sum --check --strict -
+          printf '%s\n' "$checksum_line" | sha512sum --check --strict -
 
           tar -xzf "$asset" -C "$work_dir"
 
