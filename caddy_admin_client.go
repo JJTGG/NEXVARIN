@@ -256,9 +256,24 @@ func (client *caddyAdminClient) do(
 		return response, readErr
 	}
 
+	// Do not follow redirects. A 304 is not a redirect and is returned
+	// to the caller as an ordinary HTTP response for explicit handling.
 	if httpResponse.StatusCode >= http.StatusMultipleChoices &&
-		httpResponse.StatusCode < 400 {
+		httpResponse.StatusCode < 400 &&
+		httpResponse.StatusCode != http.StatusNotModified {
 		return response, errCaddyAdminRedirectRejected
+	}
+
+	// A server error does not prove that a mutation was not applied.
+	// Preserve the response for inspection, but require read-back before
+	// the controller decides whether another mutation is necessary.
+	if isCaddyAdminMutation(method) &&
+		httpResponse.StatusCode >= http.StatusInternalServerError {
+		return response, fmt.Errorf(
+			"%w: Caddy returned HTTP %d",
+			errCaddyAdminOutcomeUnknown,
+			httpResponse.StatusCode,
+		)
 	}
 
 	return response, nil
