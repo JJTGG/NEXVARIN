@@ -35,10 +35,10 @@ var (
 
 type caddyRouteSnapshot struct {
 	ServerRoutesPath string
-	ETag              string
-	ServerRoutes      []json.RawMessage
-	Namespace         caddyRouteNamespace
-	Inventory         caddyRouteInventory
+	ETag             string
+	ServerRoutes     []json.RawMessage
+	Namespace        caddyRouteNamespace
+	Inventory        caddyRouteInventory
 }
 
 type caddyRouteNamespace struct {
@@ -72,7 +72,7 @@ type caddyRouteInventory struct {
 }
 
 type caddyRouteJSON struct {
-	ID     string                 `json:"@id"`
+	ID     string                  `json:"@id"`
 	Match  []caddyRouteMatcherJSON `json:"match"`
 	Handle []caddyRouteHandlerJSON `json:"handle"`
 }
@@ -188,10 +188,10 @@ func parseCaddyAdminServerRoutesResponse(
 
 	return caddyRouteSnapshot{
 		ServerRoutesPath: routesPath,
-		ETag:              response.ETag,
-		ServerRoutes:      append([]json.RawMessage(nil), serverRoutes...),
-		Namespace:         namespace,
-		Inventory:         inventory,
+		ETag:             response.ETag,
+		ServerRoutes:     append([]json.RawMessage(nil), serverRoutes...),
+		Namespace:        namespace,
+		Inventory:        inventory,
 	}, nil
 }
 
