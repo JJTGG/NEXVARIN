@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const caddyRouteMutationTestETag = `"mutation-snapshot-v1"`
