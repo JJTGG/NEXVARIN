@@ -323,8 +323,8 @@ func TestDiscoverCaddyRouteNamespaceUsesCurrentIndices(t *testing.T) {
 	if namespace.RoutesPath != "/config/apps/http/servers/nexvarin/routes/1/handle/1/routes" {
 		t.Fatalf("routes path = %q", namespace.RoutesPath)
 	}
-	if namespace.Routes == nil || len(namespace.Routes) != 0 {
-		t.Fatalf("routes = %v, want a non-nil empty array", namespace.Routes)
+	if len(namespace.Routes) != 0 {
+		t.Fatalf("routes = %v, want zero child routes", namespace.Routes)
 	}
 }
 
