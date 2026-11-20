@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -338,6 +339,9 @@ func deploymentRouteCaddyErrorCode(err error) string {
 
 	case errors.Is(err, errCaddyRouteHostnameConflict):
 		return "caddy_route_hostname_conflict"
+
+	case errors.Is(err, errCaddyRouteVerificationMismatch):
+		return "caddy_route_verification_mismatch"
 
 	default:
 		return "caddy_route_invalid"
