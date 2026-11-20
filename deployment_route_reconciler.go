@@ -13,7 +13,7 @@ const (
 	deploymentRouteReconcileMaxMutationAttempts = 3
 	deploymentRouteReconcileLeaseDuration       = 2 * time.Minute
 	deploymentRouteReconcileRetryDelay          = 5 * time.Second
-	deploymentRouteReconcileRecoveryTimeout    = 2 * time.Second
+	deploymentRouteReconcileRecoveryTimeout     = 2 * time.Second
 )
 
 type deploymentRouteReconcileAdapter interface {
