@@ -104,9 +104,9 @@ func TestCaddyRouteVerifierRejectsActiveRouteMismatch(
 	expected := caddyRouteMutationTestExpected()
 
 	tests := []struct {
-		name       string
-		children   []json.RawMessage
-		wantError  error
+		name      string
+		children  []json.RawMessage
+		wantError error
 	}{
 		{
 			name:      "route absent",
