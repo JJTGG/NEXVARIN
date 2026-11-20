@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -851,8 +850,7 @@ func TestDeploymentRouteReconcilerIntegrationDoesNotMutateAfterLeaseLostBeforePr
 		fixture,
 	)
 
-	const replacementOwner =
-		"other-controller:00000000-0000-4000-8000-000000000000"
+	const replacementOwner = "other-controller:00000000-0000-4000-8000-000000000000"
 
 	_, err := fixture.pool.Exec(
 		ctx,
@@ -932,8 +930,7 @@ func TestDeploymentRouteReconcilerIntegrationDoesNotPublishAfterLeaseLostDuringV
 		fixture,
 	)
 
-	const replacementOwner =
-		"other-controller:00000000-0000-4000-8000-000000000001"
+	const replacementOwner = "other-controller:00000000-0000-4000-8000-000000000001"
 
 	adapter := &deploymentRouteReconcileScriptedAdapter{
 		verifyRouteActiveFn: func(
@@ -1045,6 +1042,7 @@ func TestDeploymentRouteReconcilerIntegrationSchedulesRetryAfterContextCancellat
 		context.Background(),
 		30*time.Second,
 	)
+	defer cancel()
 
 	claim := createClaimedIneligibleDeploymentRoute(
 		t,
