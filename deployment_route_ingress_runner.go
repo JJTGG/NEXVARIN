@@ -185,6 +185,11 @@ func (runner deploymentRouteIngressRunner) validate() error {
 	if runner.Pool == nil {
 		return errors.New("deployment route ingress database pool is required")
 	}
+	if runner.Pool.Config().MaxConns < 2 {
+		return errors.New(
+			"deployment route ingress database pool must allow at least two connections",
+		)
+	}
 	if runner.Reconciler.Pool == nil || runner.Reconciler.Pool != runner.Pool {
 		return errors.New(
 			"deployment route ingress runner and reconciler must share the same database pool",
